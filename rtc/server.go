@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 
 	config "github.com/q191201771/lalmax/conf"
 
@@ -99,6 +98,7 @@ func (s *RtcServer) HandleWHIP(c *gin.Context) {
 	whipsession := NewWhipSession(streamid, pc, s.lalServer)
 	if whipsession == nil {
 		c.Status(http.StatusInternalServerError)
+		pc.Close()
 		return
 	}
 
@@ -107,6 +107,7 @@ func (s *RtcServer) HandleWHIP(c *gin.Context) {
 	sdp := whipsession.GetAnswerSDP(string(body))
 	if sdp == "" {
 		c.Status(http.StatusInternalServerError)
+		whipsession.Close()
 		return
 	}
 
@@ -143,6 +144,7 @@ func (s *RtcServer) HandleJessibuca(c *gin.Context) {
 	jessibucaSession := NewJessibucaSession(streamid, s.config.WriteChanSize, pc, s.lalServer)
 	if jessibucaSession == nil {
 		c.Status(http.StatusInternalServerError)
+		pc.Close()
 		return
 	}
 
@@ -151,6 +153,7 @@ func (s *RtcServer) HandleJessibuca(c *gin.Context) {
 	sdp := jessibucaSession.GetAnswerSDP(string(body))
 	if sdp == "" {
 		c.Status(http.StatusInternalServerError)
+		jessibucaSession.Close()
 		return
 	}
 
@@ -187,49 +190,20 @@ func (s *RtcServer) HandleWHEP(c *gin.Context) {
 	whepsession := NewWhepSession(streamid, s.config.WriteChanSize, pc, s.lalServer)
 	if whepsession == nil {
 		c.Status(http.StatusInternalServerError)
+		pc.Close()
 		return
 	}
 
 	c.Header("Location", fmt.Sprintf("whep/%s", whepsession.subscriberId))
 
-	userAgent := c.Request.UserAgent()
-	if strings.Contains(userAgent, "Safari") {
-		whepsession.SetRemoteSafari(true)
-	}
-
 	sdp := whepsession.GetAnswerSDP(string(body))
 	if sdp == "" {
 		c.Status(http.StatusInternalServerError)
+		whepsession.Close()
 		return
 	}
 
 	go whepsession.Run()
 
 	c.Data(http.StatusCreated, "application/sdp", []byte(sdp))
-}
-
-func (s *RtcServer) handleWHEP(w http.ResponseWriter, r *http.Request, streamid, body string) {
-	pc, err := newPeerConnection(s.config.ICEHostNATToIPs, s.udpMux, s.tcpMux)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	whepsession := NewWhepSession(streamid, s.config.WriteChanSize, pc, s.lalServer)
-	if whepsession == nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	sdp := whepsession.GetAnswerSDP(string(body))
-	if sdp == "" {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	go whepsession.Run()
-
-	w.Header().Set("Content-Type", "application/sdp")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(sdp))
 }

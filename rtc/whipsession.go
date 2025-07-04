@@ -131,3 +131,12 @@ func (conn *whipSession) Run() {
 		}
 	}
 }
+
+func (conn *whipSession) Close() {
+	if conn.lalServer != nil {
+		conn.lalServer.DelCustomizePubSession(conn.lalSession)
+	}
+	if conn.pc != nil {
+		conn.pc.Close()
+	}
+}

@@ -24,7 +24,6 @@ type whepSession struct {
 	audiopacker  *Packer
 	msgChan      *chanx.UnboundedChan[base.RtmpMsg]
 	closeChan    chan bool
-	remoteSafari bool
 }
 
 func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *whepSession {
@@ -43,10 +42,6 @@ func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalS
 		msgChan:      chanx.NewUnboundedChan[base.RtmpMsg](context.Background(), writeChanSize),
 		closeChan:    make(chan bool, 2),
 	}
-}
-
-func (conn *whepSession) SetRemoteSafari(val bool) {
-	conn.remoteSafari = val
 }
 
 func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
@@ -69,22 +64,19 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 
 			conn.videopacker = NewPacker(PacketH264, videoHeader.Payload)
 		} else if videoHeader.IsHevcKeySeqHeader() {
-			if conn.remoteSafari {
-				// hevc暂时只支持对接Safari hevc
-				conn.videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH265}, "video", "lalmax")
-				if err != nil {
-					nazalog.Error(err)
-					return
-				}
-
-				_, err = conn.pc.AddTrack(conn.videoTrack)
-				if err != nil {
-					nazalog.Error(err)
-					return
-				}
-
-				conn.videopacker = NewPacker(PacketSafariHevc, videoHeader.Payload)
+			conn.videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH265}, "video", "lalmax")
+			if err != nil {
+				nazalog.Error(err)
+				return
 			}
+
+			_, err = conn.pc.AddTrack(conn.videoTrack)
+			if err != nil {
+				nazalog.Error(err)
+				return
+			}
+
+			conn.videopacker = NewPacker(PacketHEVC, videoHeader.Payload)
 		}
 	}
 
@@ -242,5 +234,11 @@ func (conn *whepSession) sendVideo(msg base.RtmpMsg) {
 				continue
 			}
 		}
+	}
+}
+
+func (conn *whepSession) Close() {
+	if conn.pc != nil {
+		conn.pc.Close()
 	}
 }

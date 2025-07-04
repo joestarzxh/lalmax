@@ -54,15 +54,20 @@ func NewJessibucaSession(streamid string, writeChanSize int, pc *peerConnection,
 		closeChan:    make(chan bool, 1),
 	}
 }
-func (conn *jessibucaSession) createDataChannel() {
+func (conn *jessibucaSession) createDataChannel() (err error) {
 	if conn.DC != nil {
-		return
+		return nil
 	}
-	conn.DC, _ = conn.pc.CreateDataChannel(conn.streamId, nil)
+	conn.DC, err = conn.pc.CreateDataChannel(conn.streamId, nil)
+	return
 }
 func (conn *jessibucaSession) GetAnswerSDP(offer string) (sdp string) {
 	var err error
-	conn.createDataChannel()
+	err = conn.createDataChannel()
+	if err != nil {
+		nazalog.Error(err)
+		return
+	}
 
 	gatherComplete := webrtc.GatheringCompletePromise(conn.pc.PeerConnection)
 
@@ -182,4 +187,13 @@ func (conn *jessibucaSession) OnStop() {
 	conn.stopOne.Do(func() {
 		conn.closeChan <- true
 	})
+}
+
+func (conn *jessibucaSession) Close() {
+	if conn.DC != nil {
+		conn.DC.Close()
+	}
+	if conn.pc != nil {
+		conn.pc.Close()
+	}
 }

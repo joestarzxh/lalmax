@@ -2,7 +2,6 @@ package rtc
 
 import (
 	"fmt"
-	"math/rand"
 
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/avc"
@@ -13,12 +12,11 @@ import (
 )
 
 const (
-	PacketH264       = "H264"
-	PacketHEVC       = "HEVC"
-	PacketSafariHevc = "SafariHevc"
-	PacketPCMA       = "PCMA"
-	PacketPCMU       = "PCMU"
-	PacketOPUS       = "OPUS"
+	PacketH264 = "H264"
+	PacketHEVC = "HEVC"
+	PacketPCMA = "PCMA"
+	PacketPCMU = "PCMU"
+	PacketOPUS = "OPUS"
 )
 
 type Packer struct {
@@ -35,8 +33,8 @@ func NewPacker(mimeType string, codec []byte) *Packer {
 		p.enc = NewG711RtpEncoder(8)
 	case PacketPCMU:
 		p.enc = NewG711RtpEncoder(0)
-	case PacketSafariHevc:
-		p.enc = NewSafariHEVCRtpEncoder(codec)
+	case PacketHEVC:
+		p.enc = NewHevcRtpEncoder(codec)
 	case PacketOPUS:
 		p.enc = NewOpusRtpEncoder(111)
 	}
@@ -59,7 +57,6 @@ type H264RtpEncoder struct {
 }
 
 func NewH264RtpEncoder(codec []byte) *H264RtpEncoder {
-
 	sps, pps, err := avc.ParseSpsPpsFromSeqHeader(codec)
 	if err != nil {
 		nazalog.Error(err)
@@ -169,61 +166,51 @@ func (enc *G711RtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	return pkts, nil
 }
 
-type SafariHEVCRtpEncoder struct {
+type HevcRtpEncoder struct {
 	IRtpEncoder
-	vps         []byte
-	sps         []byte
-	pps         []byte
-	payloadType int
-	ssrc        int
-	seqId       uint16
-	tsBase      int64
+	vps       []byte
+	sps       []byte
+	pps       []byte
+	rtpPacker *rtprtcp.RtpPacker
 }
 
-func NewSafariHEVCRtpEncoder(codec []byte) *SafariHEVCRtpEncoder {
+func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
 	vps, sps, pps, err := hevc.ParseVpsSpsPpsFromSeqHeader(codec)
 	if err != nil {
 		nazalog.Error(err)
 		return nil
 	}
 
-	return &SafariHEVCRtpEncoder{
-		vps:         vps,
-		sps:         sps,
-		pps:         pps,
-		payloadType: 98,
-		ssrc:        0,
-		seqId:       uint16(rand.Int() % 65536),
-		tsBase:      -1,
+	pp := rtprtcp.NewRtpPackerPayloadHevc(func(option *rtprtcp.RtpPackerPayloadAvcHevcOption) {
+		option.Typ = rtprtcp.RtpPackerPayloadAvcHevcTypeAnnexb
+	})
+
+	return &HevcRtpEncoder{
+		vps:       vps,
+		sps:       sps,
+		pps:       pps,
+		rtpPacker: rtprtcp.NewRtpPacker(pp, 90000, 0),
 	}
 }
 
-func (enc *SafariHEVCRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
-	var pkts []*rtp.Packet
+func (enc *HevcRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	var out []byte
-	var keyFrame bool
-
-	if enc.tsBase == -1 {
-		enc.tsBase = int64(msg.Dts())
-	}
-
 	err := avc.IterateNaluAvcc(msg.Payload[5:], func(nal []byte) {
 		t := hevc.ParseNaluType(nal[0])
-		if t == hevc.NaluTypeSei {
+		if t == hevc.NaluTypeSei || t == hevc.NaluTypeSeiSuffix {
 			return
 		}
 
-		if hevc.IsIrapNalu(t) {
-			keyFrame = true
-			out = append(out, avc.NaluStartCode4...)
+		if t == hevc.NaluTypeSliceIdr || t == hevc.NaluTypeSliceIdrNlp || t == hevc.NaluTypeSliceCranut {
+			out = append(out, avc.NaluStartCode3...)
 			out = append(out, enc.vps...)
-			out = append(out, avc.NaluStartCode4...)
+			out = append(out, avc.NaluStartCode3...)
 			out = append(out, enc.sps...)
-			out = append(out, avc.NaluStartCode4...)
+			out = append(out, avc.NaluStartCode3...)
 			out = append(out, enc.pps...)
 		}
 
-		out = append(out, avc.NaluStartCode4...)
+		out = append(out, avc.NaluStartCode3...)
 		out = append(out, nal...)
 	})
 
@@ -235,23 +222,22 @@ func (enc *SafariHEVCRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error)
 		return nil, fmt.Errorf("Packetize failed")
 	}
 
-	payloads := enc.doPacketNaluForSafariHevc(out, keyFrame)
-	for i, payload := range payloads {
-		var pkt rtp.Packet
-		pkt.Version = 2
-		pkt.Timestamp = uint32((int64(msg.Dts()) - enc.tsBase) * 90)
-		pkt.PayloadType = uint8(enc.payloadType)
-		pkt.SSRC = uint32(enc.ssrc)
+	avpacket := base.AvPacket{
+		Timestamp: int64(msg.Dts()),
+		Payload:   out,
+	}
 
-		if i == len(payloads)-1 {
-			pkt.Marker = true
+	var pkts []*rtp.Packet
+	rtpPkts := enc.rtpPacker.Pack(avpacket)
+	for _, pkt := range rtpPkts {
+		var newRtpPkt rtp.Packet
+		err := newRtpPkt.Unmarshal(pkt.Raw)
+		if err != nil {
+			nazalog.Error(err)
+			continue
 		}
 
-		pkt.SequenceNumber = enc.seqId
-		enc.seqId += 1
-		pkt.Payload = payload
-
-		pkts = append(pkts, &pkt)
+		pkts = append(pkts, &newRtpPkt)
 	}
 
 	if len(pkts) == 0 {
@@ -259,44 +245,6 @@ func (enc *SafariHEVCRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error)
 	}
 
 	return pkts, nil
-}
-
-func (enc *SafariHEVCRtpEncoder) doPacketNaluForSafariHevc(nalu []byte, keyFrame bool) [][]byte {
-	var rtpPayloads [][]byte
-
-	naluLen := len(nalu)
-	maxPayloadSize := 1200
-	splitNum := naluLen/maxPayloadSize + 1
-	remainder := naluLen % splitNum
-	referenceLen := naluLen / splitNum
-	dataPos := 0
-
-	for i := splitNum; i > 0; i-- {
-		tmpLen := referenceLen
-		if i < remainder {
-			tmpLen++
-		}
-		buf := make([]byte, tmpLen+1)
-		if keyFrame {
-			if i == splitNum {
-				buf[0] = 3
-			} else {
-				buf[0] = 1
-			}
-		} else {
-			if i == splitNum {
-				buf[0] = 2
-			} else {
-				buf[0] = 0
-			}
-		}
-		copy(buf[1:], nalu[dataPos:dataPos+tmpLen])
-		dataPos += tmpLen
-
-		rtpPayloads = append(rtpPayloads, buf)
-	}
-
-	return rtpPayloads
 }
 
 type OpusRtpEncoder struct {
