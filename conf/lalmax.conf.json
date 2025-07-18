@@ -24,7 +24,7 @@
     "enable": true
   },
   "hls_config": {
-    "enable": true
+    "enable": false
   },
   "hook_config": {
     "gop_cache_num": 1,
