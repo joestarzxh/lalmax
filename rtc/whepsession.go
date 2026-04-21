@@ -1,6 +1,7 @@
 package rtc
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/q191201771/lalmax/hook"
@@ -8,7 +9,9 @@ import (
 
 	"github.com/gofrs/uuid"
 	"github.com/pion/webrtc/v3"
+	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/hevc"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
@@ -192,6 +195,7 @@ func (conn *whepSession) OnMsg(msg base.RtmpMsg) {
 		}
 	case base.RtmpTypeIdVideo:
 		if msg.IsVideoKeySeqHeader() {
+			conn.updateVideoCodec(msg)
 			return
 		}
 		if conn.videoTrack != nil {
@@ -234,6 +238,45 @@ func (conn *whepSession) sendVideo(msg base.RtmpMsg) {
 				continue
 			}
 		}
+	}
+}
+
+func (conn *whepSession) updateVideoCodec(msg base.RtmpMsg) {
+	if conn.videopacker == nil {
+		return
+	}
+
+	if msg.IsAvcKeySeqHeader() {
+		sps, pps, err := avc.ParseSpsPpsFromSeqHeader(msg.Payload)
+		if err != nil {
+			nazalog.Error("ParseSpsPpsFromSeqHeader err:", err)
+			return
+		}
+
+		if h264Encoder, ok := conn.videopacker.enc.(*H264RtpEncoder); ok {
+			if bytes.Equal(h264Encoder.sps, sps) && bytes.Equal(h264Encoder.pps, pps) {
+				return
+			}
+		}
+
+		conn.videopacker.UpdateVideoCodec(nil, sps, pps)
+		return
+	}
+
+	if msg.IsHevcKeySeqHeader() {
+		vps, sps, pps, err := hevc.ParseVpsSpsPpsFromSeqHeader(msg.Payload)
+		if err != nil {
+			nazalog.Error("ParseVpsSpsPpsFromSeqHeader err:", err)
+			return
+		}
+
+		if hevcEncoder, ok := conn.videopacker.enc.(*HevcRtpEncoder); ok {
+			if bytes.Equal(hevcEncoder.vps, vps) && bytes.Equal(hevcEncoder.sps, sps) && bytes.Equal(hevcEncoder.pps, pps) {
+				return
+			}
+		}
+
+		conn.videopacker.UpdateVideoCodec(vps, sps, pps)
 	}
 }
 
