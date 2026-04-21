@@ -1,6 +1,10 @@
 package hook
 
-import "github.com/q191201771/lal/pkg/base"
+import (
+	"bytes"
+
+	"github.com/q191201771/lal/pkg/base"
+)
 
 // GopCache gop cache
 type GopCache struct {
@@ -35,15 +39,26 @@ func (c *GopCache) Feed(msg base.RtmpMsg) {
 		return
 	case base.RtmpTypeIdAudio:
 		if msg.IsAacSeqHeader() {
-			c.audioheader = &msg
+			if c.audioheader == nil || !bytes.Equal(c.audioheader.Payload, msg.Payload) {
+				c.Clear()
+			}
+			m := msg.Clone()
+			c.audioheader = &m
 			return
 		}
 		if msg.AudioCodecId() == base.RtmpSoundFormatG711A || msg.AudioCodecId() == base.RtmpSoundFormatG711U || msg.AudioCodecId() == base.RtmpSoundFormatOpus {
-			c.audioheader = &msg
+			if c.audioheader == nil || c.audioheader.AudioCodecId() != msg.AudioCodecId() {
+				m := msg.Clone()
+				c.audioheader = &m
+			}
 		}
 	case base.RtmpTypeIdVideo:
 		if msg.IsVideoKeySeqHeader() {
-			c.videoheader = &msg
+			if c.videoheader == nil || !bytes.Equal(c.videoheader.Payload, msg.Payload) {
+				c.Clear()
+			}
+			m := msg.Clone()
+			c.videoheader = &m
 			return
 		}
 	}
@@ -72,7 +87,7 @@ func (c *GopCache) feedLastGop(msg base.RtmpMsg) {
 	}
 
 	idx := (c.last - 1 + c.gopSize) % c.gopSize
-	if c.singleGopMaxFrameNum == 0 || c.data[idx].size() <= c.singleGopMaxFrameNum {
+	if c.singleGopMaxFrameNum == 0 || c.data[idx].size() < c.singleGopMaxFrameNum {
 		c.data[idx].feed(msg)
 	}
 }
@@ -107,7 +122,7 @@ type Gop struct {
 }
 
 func (g *Gop) feed(msg base.RtmpMsg) {
-	g.data = append(g.data, msg)
+	g.data = append(g.data, msg.Clone())
 }
 
 func (g *Gop) clear() {

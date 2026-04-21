@@ -9,13 +9,9 @@ import (
 
 	"github.com/q191201771/lalmax/rtc"
 
-	"github.com/q191201771/lalmax/onvif"
-
 	"github.com/q191201771/lalmax/hook"
 
 	"github.com/q191201771/lalmax/gb28181"
-
-	"github.com/q191201771/lalmax/room"
 
 	httpfmp4 "github.com/q191201771/lalmax/fmp4/http-fmp4"
 
@@ -38,8 +34,6 @@ type LalMaxServer struct {
 	httpfmp4svr *httpfmp4.HttpFmp4Server
 	hlssvr      *hls.HlsServer
 	gbsbr       *gb28181.GB28181Server
-	onvifsvr    *onvif.OnvifServer
-	roomsvr     *room.RoomServer
 }
 
 func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
@@ -79,14 +73,6 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 
 	if conf.GB28181Config.Enable {
 		maxsvr.gbsbr = gb28181.NewGB28181Server(conf.GB28181Config, lalsvr)
-	}
-
-	if conf.OnvifConfig.Enable {
-		maxsvr.onvifsvr = onvif.NewOnvifServer()
-	}
-
-	if conf.RoomConfig.Enable {
-		maxsvr.roomsvr = room.NewRoomServer(conf.RoomConfig.APIKey, conf.RoomConfig.APISecret)
 	}
 
 	maxsvr.router = gin.Default()
@@ -131,10 +117,6 @@ func (s *LalMaxServer) Run() (err error) {
 
 	if s.gbsbr != nil {
 		go s.gbsbr.Start()
-	}
-
-	if s.roomsvr != nil {
-		go s.roomsvr.Start()
 	}
 
 	return s.lalsvr.RunLoop()

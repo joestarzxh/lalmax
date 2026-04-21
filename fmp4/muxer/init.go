@@ -506,7 +506,7 @@ func (i *Init) Unmarshal(r io.ReadSeeker) error {
 
 						ascCtx, err := aac.NewAscContext(spec)
 						if err != nil {
-							return nil, fmt.Errorf("NewAscContext failed, err:", err)
+							return nil, fmt.Errorf("NewAscContext failed, err: %w", err)
 						}
 
 						curTrack.Codec = &CodecAAC{
