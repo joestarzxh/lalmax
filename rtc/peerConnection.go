@@ -38,10 +38,26 @@ func newPeerConnection(ips []string, iceUDPMux ice.UDPMux, iceTCPMux ice.TCPMux)
 	err = mediaEngine.RegisterCodec(
 		webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   90000,
+				SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+			},
+			PayloadType: 96,
+		},
+		webrtc.RTPCodecTypeVideo)
+
+	if err != nil {
+		nazalog.Error(err)
+		return
+	}
+
+	err = mediaEngine.RegisterCodec(
+		webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType:  webrtc.MimeTypeH264,
 				ClockRate: 90000,
 			},
-			PayloadType: 96,
+			PayloadType: 103,
 		},
 		webrtc.RTPCodecTypeVideo)
 

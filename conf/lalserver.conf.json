@@ -112,7 +112,7 @@
       "addr": ":8084"
     },
     "log": {
-      "level": 1,
+      "level": 2,
       "filename": "./logs/lalmax.log",
       "is_to_stdout": true,
       "is_rotate_daily": true,

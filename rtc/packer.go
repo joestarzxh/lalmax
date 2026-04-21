@@ -42,7 +42,25 @@ func NewPacker(mimeType string, codec []byte) *Packer {
 }
 
 func (p *Packer) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
+	if p == nil || p.enc == nil {
+		return nil, fmt.Errorf("packer encoder is nil")
+	}
 	return p.enc.Encode(msg)
+}
+
+func (p *Packer) UpdateVideoCodec(vps, sps, pps []byte) {
+	if p == nil || p.enc == nil {
+		return
+	}
+
+	if h264Encoder, ok := p.enc.(*H264RtpEncoder); ok {
+		h264Encoder.UpdateVideoCodec(vps, sps, pps)
+		return
+	}
+
+	if hevcEncoder, ok := p.enc.(*HevcRtpEncoder); ok {
+		hevcEncoder.UpdateVideoCodec(vps, sps, pps)
+	}
 }
 
 type IRtpEncoder interface {
@@ -126,6 +144,11 @@ func (enc *H264RtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	return pkts, nil
 }
 
+func (enc *H264RtpEncoder) UpdateVideoCodec(_ []byte, sps, pps []byte) {
+	enc.sps = sps
+	enc.pps = pps
+}
+
 type G711RtpEncoder struct {
 	IRtpEncoder
 	rtpPacker *rtprtcp.RtpPacker
@@ -201,7 +224,7 @@ func (enc *HevcRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 			return
 		}
 
-		if t == hevc.NaluTypeSliceIdr || t == hevc.NaluTypeSliceIdrNlp || t == hevc.NaluTypeSliceCranut {
+		if hevc.IsIrapNalu(t) {
 			out = append(out, avc.NaluStartCode3...)
 			out = append(out, enc.vps...)
 			out = append(out, avc.NaluStartCode3...)
@@ -245,6 +268,12 @@ func (enc *HevcRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	}
 
 	return pkts, nil
+}
+
+func (enc *HevcRtpEncoder) UpdateVideoCodec(vps, sps, pps []byte) {
+	enc.vps = vps
+	enc.sps = sps
+	enc.pps = pps
 }
 
 type OpusRtpEncoder struct {

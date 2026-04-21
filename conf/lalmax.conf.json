@@ -31,7 +31,7 @@
     "single_gop_max_frame_num": 0
   },
   "gb28181_config": {
-    "enable": true,
+    "enable": false,
     "serial": "34020000002000000001",
     "realm": "3402000000",
     "sip_ip": "192.168.254.165",
