@@ -41,10 +41,6 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 
 	// hls-fmp4/llhls
 	router.GET("/live/hls/:streamid/:type", s.HandleHls)
-
-	// onvif
-	router.POST("/api/ctrl/onvif/pull", s.HandleOnvifPull)
-
 	// gb
 	gbLogic := gb28181.NewGbLogic(s.gbsbr)
 	gb := router.Group("/api/gb")
@@ -125,12 +121,6 @@ func (s *LalMaxServer) HandleHttpFmp4(c *gin.Context) {
 	} else {
 		nazalog.Error("http-fmp4 is disable")
 		c.Status(http.StatusNotFound)
-	}
-}
-
-func (s *LalMaxServer) HandleOnvifPull(c *gin.Context) {
-	if s.onvifsvr != nil {
-		s.onvifsvr.HandlePull(c)
 	}
 }
 

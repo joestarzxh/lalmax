@@ -51,7 +51,6 @@ func (s *Subscriber) Run() {
 	if ok {
 		var err error
 		sendBuf := make([]byte, 0, s.maxSendPacketSize*ts.TS_PAKCET_SIZE)
-		session.AddConsumer(s.subscriberId, s)
 		s.muxer.OnPacket = func(tsPacket []byte) {
 			defer func() {
 				if err != nil {
@@ -76,6 +75,7 @@ func (s *Subscriber) Run() {
 			sendBuf = append(sendBuf, tsPacket...)
 
 		}
+		session.AddConsumer(s.subscriberId, s)
 	} else {
 		nazalog.Warnf("not found hook session, streamName:%s", s.streamName)
 		s.conn.Close()

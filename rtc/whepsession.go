@@ -3,6 +3,8 @@ package rtc
 import (
 	"bytes"
 	"context"
+	"sync"
+	"time"
 
 	"github.com/q191201771/lalmax/hook"
 	"github.com/smallnest/chanx"
@@ -16,17 +18,25 @@ import (
 	"github.com/q191201771/naza/pkg/nazalog"
 )
 
+const whepMaxReplayPaceDelay = 5 * time.Millisecond
+
 type whepSession struct {
-	hooks        *hook.HookSession
-	pc           *peerConnection
-	subscriberId string
-	lalServer    logic.ILalServer
-	videoTrack   *webrtc.TrackLocalStaticRTP
-	audioTrack   *webrtc.TrackLocalStaticRTP
-	videopacker  *Packer
-	audiopacker  *Packer
-	msgChan      *chanx.UnboundedChan[base.RtmpMsg]
-	closeChan    chan bool
+	hooks          *hook.HookSession
+	pc             *peerConnection
+	subscriberId   string
+	lalServer      logic.ILalServer
+	videoTrack     *webrtc.TrackLocalStaticRTP
+	audioTrack     *webrtc.TrackLocalStaticRTP
+	videopacker    *Packer
+	audiopacker    *Packer
+	msgChan        *chanx.UnboundedChan[base.RtmpMsg]
+	closeChan      chan bool
+	connectedChan  chan struct{}
+	connectedOnce  sync.Once
+	paceBaseDts    uint32
+	paceBaseAt     time.Time
+	paceStarted    bool
+	replayingCache bool
 }
 
 func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *whepSession {
@@ -38,12 +48,13 @@ func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalS
 
 	u, _ := uuid.NewV4()
 	return &whepSession{
-		hooks:        session,
-		pc:           pc,
-		lalServer:    lalServer,
-		subscriberId: u.String(),
-		msgChan:      chanx.NewUnboundedChan[base.RtmpMsg](context.Background(), writeChanSize),
-		closeChan:    make(chan bool, 2),
+		hooks:         session,
+		pc:            pc,
+		lalServer:     lalServer,
+		subscriberId:  u.String(),
+		msgChan:       chanx.NewUnboundedChan[base.RtmpMsg](context.Background(), writeChanSize),
+		closeChan:     make(chan bool, 2),
+		connectedChan: make(chan struct{}, 1),
 	}
 }
 
@@ -153,13 +164,12 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 }
 
 func (conn *whepSession) Run() {
-	conn.hooks.AddConsumer(conn.subscriberId, conn)
-
 	conn.pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		nazalog.Info("peer connection state: ", state.String())
 
 		switch state {
 		case webrtc.PeerConnectionStateConnected:
+			conn.signalConnected()
 		case webrtc.PeerConnectionStateDisconnected:
 			fallthrough
 		case webrtc.PeerConnectionStateFailed:
@@ -169,9 +179,35 @@ func (conn *whepSession) Run() {
 		}
 	})
 
+	if conn.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+		conn.signalConnected()
+	}
+
+	for {
+		select {
+		case <-conn.connectedChan:
+			conn.hooks.AddConsumer(conn.subscriberId, conn)
+			goto connected
+		case <-conn.closeChan:
+			nazalog.Info("RemoveConsumer, connid:", conn.subscriberId)
+			conn.hooks.RemoveConsumer(conn.subscriberId)
+			return
+		}
+	}
+
+connected:
 	for {
 		select {
 		case msg := <-conn.msgChan.Out:
+			if msg.Header.MsgTypeId == 0 {
+				conn.replayingCache = false
+				conn.paceBaseAt = time.Time{}
+				conn.paceStarted = false
+				continue
+			}
+			if conn.replayingCache {
+				conn.paceReplayMsg(msg)
+			}
 			if msg.Header.MsgTypeId == base.RtmpTypeIdAudio && conn.audioTrack != nil {
 				conn.sendAudio(msg)
 			} else if msg.Header.MsgTypeId == base.RtmpTypeIdVideo && conn.videoTrack != nil {
@@ -183,6 +219,55 @@ func (conn *whepSession) Run() {
 			return
 		}
 	}
+}
+
+func (conn *whepSession) signalConnected() {
+	conn.connectedOnce.Do(func() {
+		conn.connectedChan <- struct{}{}
+	})
+}
+
+func (conn *whepSession) OnReplayStart() {
+	conn.replayingCache = true
+	conn.paceBaseAt = time.Time{}
+	conn.paceBaseDts = 0
+	conn.paceStarted = false
+}
+
+func (conn *whepSession) OnReplayStop() {
+	conn.msgChan.In <- base.RtmpMsg{}
+}
+
+func (conn *whepSession) paceReplayMsg(msg base.RtmpMsg) {
+	if msg.Header.MsgTypeId != base.RtmpTypeIdAudio && msg.Header.MsgTypeId != base.RtmpTypeIdVideo {
+		return
+	}
+	if msg.IsVideoKeySeqHeader() || msg.IsAacSeqHeader() {
+		return
+	}
+
+	if !conn.paceStarted {
+		conn.paceBaseDts = msg.Dts()
+		conn.paceBaseAt = time.Now()
+		conn.paceStarted = true
+		return
+	}
+
+	dtsDelta := int64(msg.Dts()) - int64(conn.paceBaseDts)
+	if dtsDelta <= 0 {
+		return
+	}
+
+	mediaElapsed := time.Duration(dtsDelta) * time.Millisecond
+	delay := time.Until(conn.paceBaseAt.Add(mediaElapsed))
+	if delay <= 0 {
+		return
+	}
+	if delay > whepMaxReplayPaceDelay {
+		delay = whepMaxReplayPaceDelay
+	}
+
+	time.Sleep(delay)
 }
 
 func (conn *whepSession) OnMsg(msg base.RtmpMsg) {

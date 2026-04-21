@@ -17,18 +17,27 @@ type IHookSessionSubscriber interface {
 	OnStop()
 }
 
+type IHookSessionReplaySubscriber interface {
+	OnReplayStart()
+	OnReplayStop()
+}
+
 type HookSession struct {
-	uniqueKey  string
-	streamName string
-	consumers  sync.Map
-	hlssvr     *hls.HlsServer
-	gopCache   *GopCache
-	hasVideo   bool
+	uniqueKey   string
+	streamName  string
+	consumers   sync.Map
+	hlssvr      *hls.HlsServer
+	gopCache    *GopCache
+	gopCacheMux sync.RWMutex
+	msgMux      sync.Mutex
+	hasVideo    bool
 }
 
 type consumerInfo struct {
 	subscriber   IHookSessionSubscriber
 	hasSendVideo bool
+	replayCache  bool
+	writeMux     sync.Mutex
 
 	base.StatSession
 }
@@ -95,44 +104,12 @@ func (session *HookSession) OnMsg(msg base.RtmpMsg) {
 		session.hlssvr.OnMsg(session.streamName, msg)
 	}
 
+	session.msgMux.Lock()
+	hasVideo := session.hasVideo
+	consumers := make([]*consumerInfo, 0)
 	session.consumers.Range(func(key, value interface{}) bool {
-		c := value.(*consumerInfo)
-
-		gopCount := session.gopCache.GetGopCount()
-		if !c.hasSendVideo && gopCount > 0 {
-			if v := session.GetVideoSeqHeaderMsg(); v != nil {
-				c.subscriber.OnMsg(*v)
-			}
-			if v := session.GetAudioSeqHeaderMsg(); v != nil {
-				c.subscriber.OnMsg(*v)
-			}
-			for i := 0; i < gopCount; i++ {
-				for _, item := range session.gopCache.GetGopDataAt(i) {
-					c.subscriber.OnMsg(item)
-				}
-			}
-			c.hasSendVideo = true
-		}
-
-		if msg.Header.MsgTypeId == base.RtmpTypeIdVideo {
-			if !c.hasSendVideo {
-				if !msg.IsVideoKeyNalu() {
-					return true
-				}
-				if v := session.GetVideoSeqHeaderMsg(); v != nil {
-					c.subscriber.OnMsg(*v)
-				}
-				if v := session.GetAudioSeqHeaderMsg(); v != nil {
-					c.subscriber.OnMsg(*v)
-				}
-				c.hasSendVideo = true
-			}
-
-			c.subscriber.OnMsg(msg)
-		} else if msg.Header.MsgTypeId == base.RtmpTypeIdAudio {
-			if !session.hasVideo || c.hasSendVideo {
-				c.subscriber.OnMsg(msg)
-			}
+		if c, ok := value.(*consumerInfo); ok {
+			consumers = append(consumers, c)
 		}
 		return true
 	})
@@ -141,7 +118,14 @@ func (session *HookSession) OnMsg(msg base.RtmpMsg) {
 		session.hasVideo = true
 	}
 
+	session.gopCacheMux.Lock()
 	session.gopCache.Feed(msg)
+	session.gopCacheMux.Unlock()
+	session.msgMux.Unlock()
+
+	for _, c := range consumers {
+		session.handleConsumerMsg(c, msg, hasVideo)
+	}
 }
 
 func (session *HookSession) OnStop() {
@@ -152,7 +136,9 @@ func (session *HookSession) OnStop() {
 	nazalog.Debugf("OnStop, uniqueKey:%s, streamName:%s", session.uniqueKey, session.streamName)
 	session.consumers.Range(func(key, value interface{}) bool {
 		c := value.(*consumerInfo)
-		c.subscriber.OnStop()
+		if c.subscriber != nil {
+			c.subscriber.OnStop()
+		}
 		return true
 	})
 
@@ -160,9 +146,13 @@ func (session *HookSession) OnStop() {
 }
 
 func (session *HookSession) AddConsumer(consumerId string, subscriber IHookSessionSubscriber) {
+	session.AddConsumerWithReplay(consumerId, subscriber, true)
+}
 
+func (session *HookSession) AddConsumerWithReplay(consumerId string, subscriber IHookSessionSubscriber, replayCache bool) {
 	info := &consumerInfo{
-		subscriber: subscriber,
+		subscriber:  subscriber,
+		replayCache: replayCache,
 		StatSession: base.StatSession{
 			SessionId: consumerId,
 			StartTime: time.Now().Format(time.DateTime),
@@ -171,7 +161,22 @@ func (session *HookSession) AddConsumer(consumerId string, subscriber IHookSessi
 	}
 
 	nazalog.Info("AddConsumer, consumerId:", consumerId)
+	if replayCache {
+		info.writeMux.Lock()
+	}
+	var replayMsgs []base.RtmpMsg
+
+	session.msgMux.Lock()
 	session.consumers.Store(consumerId, info)
+	if replayCache {
+		replayMsgs = session.getGopReplayMessages()
+	}
+	session.msgMux.Unlock()
+
+	if replayCache {
+		session.replayGopMessagesLocked(info, replayMsgs)
+		info.writeMux.Unlock()
+	}
 }
 
 func (session *HookSession) GetAllConsumer() []base.StatSub {
@@ -196,9 +201,100 @@ func (session *HookSession) RemoveConsumer(consumerId string) {
 }
 
 func (session *HookSession) GetVideoSeqHeaderMsg() *base.RtmpMsg {
-	return session.gopCache.videoheader
+	session.gopCacheMux.RLock()
+	defer session.gopCacheMux.RUnlock()
+	if session.gopCache.videoheader == nil {
+		return nil
+	}
+	m := session.gopCache.videoheader.Clone()
+	return &m
 }
 
 func (session *HookSession) GetAudioSeqHeaderMsg() *base.RtmpMsg {
-	return session.gopCache.audioheader
+	session.gopCacheMux.RLock()
+	defer session.gopCacheMux.RUnlock()
+	if session.gopCache.audioheader == nil {
+		return nil
+	}
+	m := session.gopCache.audioheader.Clone()
+	return &m
+}
+
+func (session *HookSession) handleConsumerMsg(c *consumerInfo, msg base.RtmpMsg, hasVideo bool) {
+	if c == nil {
+		return
+	}
+
+	c.writeMux.Lock()
+	defer c.writeMux.Unlock()
+
+	if c.subscriber == nil {
+		return
+	}
+
+	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo {
+		if !c.hasSendVideo {
+			if !msg.IsVideoKeyNalu() {
+				return
+			}
+			if v := session.GetVideoSeqHeaderMsg(); v != nil {
+				c.subscriber.OnMsg(*v)
+			}
+			if v := session.GetAudioSeqHeaderMsg(); v != nil && v.IsAacSeqHeader() {
+				c.subscriber.OnMsg(*v)
+			}
+			c.hasSendVideo = true
+		}
+
+		c.subscriber.OnMsg(msg)
+	} else if msg.Header.MsgTypeId == base.RtmpTypeIdAudio {
+		if !hasVideo || c.hasSendVideo {
+			c.subscriber.OnMsg(msg)
+		}
+	}
+}
+
+func (session *HookSession) replayGopMessagesLocked(c *consumerInfo, msgs []base.RtmpMsg) {
+	if c == nil || c.subscriber == nil || c.hasSendVideo || !c.replayCache {
+		return
+	}
+
+	if len(msgs) == 0 {
+		return
+	}
+
+	if replaySubscriber, ok := c.subscriber.(IHookSessionReplaySubscriber); ok {
+		replaySubscriber.OnReplayStart()
+		defer replaySubscriber.OnReplayStop()
+	}
+
+	for _, msg := range msgs {
+		c.subscriber.OnMsg(msg)
+	}
+	c.hasSendVideo = true
+}
+
+func (session *HookSession) getGopReplayMessages() []base.RtmpMsg {
+	session.gopCacheMux.RLock()
+	defer session.gopCacheMux.RUnlock()
+
+	gopCount := session.gopCache.GetGopCount()
+	if gopCount == 0 {
+		return nil
+	}
+
+	msgs := make([]base.RtmpMsg, 0, gopCount)
+	if v := session.gopCache.videoheader; v != nil {
+		msgs = append(msgs, v.Clone())
+	}
+	if v := session.gopCache.audioheader; v != nil && v.IsAacSeqHeader() {
+		msgs = append(msgs, v.Clone())
+	}
+	for i := 0; i < gopCount; i++ {
+		for _, item := range session.gopCache.GetGopDataAt(i) {
+			msgs = append(msgs, item.Clone())
+		}
+	}
+
+	return msgs
 }
