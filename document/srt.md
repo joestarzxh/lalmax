@@ -35,14 +35,14 @@ SRT(Secure Reliable Transport)的简称,主要优化在不可靠网络(非阻塞
 (1) 启动LalMax服务
 
 (2) 使用OBS进行推流，在"直播"中输入srt的推流地址
-![图片](../image/srt_0.png)
+![图片](images/srt_0.png)
 
 (3) VLC进行播放
 
 在VLC中设置streamid,这部分填streamid后面的所有信息
-![图片](../image/srt_1.png)
+![图片](images/srt_1.png)
 
 输入streamid前面的部分进行拉流
-![图片](../image/srt_2.png)
+![图片](images/srt_2.png)
 
-![图片](../image/srt_3.png)
+![图片](images/srt_3.png)

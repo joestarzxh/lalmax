@@ -9,7 +9,7 @@ import (
 
 	"github.com/q191201771/lalmax/rtc"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
 	"github.com/q191201771/lalmax/gb28181"
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/q191201771/lalmax/fmp4/hls"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/q191201771/lal/pkg/logic"
@@ -67,12 +67,12 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 		}
 	}
 
-	if conf.HttpFmp4Config.Enable {
+	if conf.Fmp4Config.Http.Enable {
 		maxsvr.httpfmp4svr = httpfmp4.NewHttpFmp4Server()
 	}
 
-	if conf.HlsConfig.Enable {
-		maxsvr.hlssvr = hls.NewHlsServer(conf.HlsConfig)
+	if conf.Fmp4Config.Hls.Enable {
+		maxsvr.hlssvr = hls.NewHlsServer(conf.Fmp4Config.Hls)
 	}
 
 	if conf.GB28181Config.Enable {
@@ -91,8 +91,8 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 
 func (s *LalMaxServer) Run() (err error) {
 	s.lalsvr.WithOnHookSession(func(uniqueKey string, streamName string) logic.ICustomizeHookSessionContext {
-		// 有新的流了，创建业务层的对象，用于hook这个流
-		return hook.NewHookSession(uniqueKey, streamName, s.hlssvr, s.conf.HookConfig.GopCacheNum, s.conf.HookConfig.SingleGopMaxFrameNum)
+		// lal 有新的输入流时，创建 lalmax 扩展流组用于分发扩展协议。
+		return maxlogic.NewGroupByStreamName(uniqueKey, streamName, s.hlssvr, s.conf.LogicConfig.GopCacheNum, s.conf.LogicConfig.SingleGopMaxFrameNum)
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

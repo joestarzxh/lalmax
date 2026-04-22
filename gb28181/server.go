@@ -12,7 +12,7 @@ import (
 	"time"
 
 	udpTransport "github.com/pion/transport/v3/udp"
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 	"github.com/q191201771/lalmax/gb28181/mediaserver"
 
 	"github.com/ghettovoice/gosip"

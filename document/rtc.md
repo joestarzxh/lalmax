@@ -92,9 +92,9 @@ WHEP拉流可以使用[vue-wish](https://github.com/zllovesuki/vue-wish)测试
 
 OBS推流配置
 
-![图片](../image/rtc_01.jpeg)
+![图片](images/rtc_01.jpeg)
 
 vue-wish拉流效果
 
-![图片](../image/rtc_02.png)
+![图片](images/rtc_02.png)
 

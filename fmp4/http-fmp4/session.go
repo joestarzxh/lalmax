@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/q191201771/lalmax/fmp4/muxer"
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
 	"github.com/gofrs/uuid"
 	"github.com/q191201771/naza/pkg/connection"
@@ -26,8 +26,9 @@ var (
 )
 
 type HttpFmp4Session struct {
+	appName      string
 	streamid     string
-	hooks        *hook.HookSession
+	group        *maxlogic.Group
 	subscriberId string
 
 	rtmp2Fmp4Remuxer *muxer.Rtmp2Fmp4Remuxer
@@ -37,12 +38,13 @@ type HttpFmp4Session struct {
 	log              nazalog.Logger
 }
 
-func NewHttpFmp4Session(streamid string) *HttpFmp4Session {
+func NewHttpFmp4Session(appName, streamid string) *HttpFmp4Session {
 
 	streamid = strings.TrimSuffix(streamid, ".mp4")
 	u, _ := uuid.NewV4()
 
 	session := &HttpFmp4Session{
+		appName:      appName,
 		streamid:     streamid,
 		subscriberId: u.String(),
 		log:          nazalog.WithPrefix(u.String()),
@@ -50,7 +52,7 @@ func NewHttpFmp4Session(streamid string) *HttpFmp4Session {
 
 	session.rtmp2Fmp4Remuxer = muxer.NewRtmp2Fmp4Remuxer(session).WithLog(session.log)
 
-	session.log.Info("create http fmp4 seesion, streamid:", streamid)
+	session.log.Infof("create http fmp4 session, appName:%s, streamid:%s", appName, streamid)
 
 	return session
 }
@@ -82,14 +84,14 @@ func (session *HttpFmp4Session) dispose() error {
 	return retErr
 }
 func (session *HttpFmp4Session) handleSession(c *gin.Context) {
-	ok, hooksession := hook.GetHookSessionManagerInstance().GetHookSession(session.streamid)
+	ok, group := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(session.appName, session.streamid))
 	if !ok {
-		nazalog.Error("stream is not found, streamid:", session.streamid)
+		nazalog.Errorf("stream is not found, appName:%s, streamid:%s", session.appName, session.streamid)
 		c.Status(http.StatusNotFound)
 		return
 	}
 
-	session.hooks = hooksession
+	session.group = group
 	session.w = c.Writer
 
 	c.Header("Content-Type", "video/mp4")
@@ -117,7 +119,10 @@ func (session *HttpFmp4Session) handleSession(c *gin.Context) {
 		nazalog.Errorf("session writeHttpHeader. err=%+v", err)
 		return
 	}
-	session.hooks.AddConsumer(session.subscriberId, session)
+	session.group.AddSubscriber(maxlogic.SubscriberInfo{
+		SubscriberID: session.subscriberId,
+		Protocol:     maxlogic.SubscriberProtocolHTTPFMP4,
+	}, session)
 
 	go func() {
 		readBuf := make([]byte, 1024)
@@ -162,5 +167,7 @@ func (session *HttpFmp4Session) OnMsg(msg base.RtmpMsg) {
 }
 
 func (session *HttpFmp4Session) OnStop() {
-	session.hooks.RemoveConsumer(session.subscriberId)
+	if session.group != nil {
+		session.group.RemoveSubscriber(session.subscriberId)
+	}
 }

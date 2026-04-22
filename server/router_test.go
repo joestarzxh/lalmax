@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/q191201771/lal/pkg/base"
 )
@@ -23,8 +23,10 @@ const httpNotifyAddr = ":55559"
 func TestMain(m *testing.M) {
 	var err error
 	max, err = NewLalMaxServer(&config.Config{
-		HttpFmp4Config: config.HttpFmp4Config{Enable: true},
-		LalRawContent:  []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
+		Fmp4Config: config.Fmp4Config{
+			Http: config.Fmp4HttpConfig{Enable: true},
+		},
+		LalRawContent: []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
 		HttpConfig: config.HttpConfig{
 			ListenAddr: ":52349",
 		},
@@ -67,9 +69,9 @@ func TestAllGroup(t *testing.T) {
 	})
 
 	t.Run("has consumer", func(t *testing.T) {
-		ss := hook.NewHookSession("test", "test", max.hlssvr, 1, 0)
+		ss := maxlogic.NewGroupByStreamName("test", "test", max.hlssvr, 1, 0)
 		ss.AddConsumer("consumer1", nil)
-		hook.GetHookSessionManagerInstance().SetHookSession("test", ss)
+		maxlogic.GetGroupManagerInstance().SetGroupByStreamName("test", ss)
 
 		r := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/api/stat/all_group", nil)
@@ -103,9 +105,9 @@ func TestNotifyUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ss := hook.NewHookSession(streamName, streamName, max.hlssvr, 1, 0)
+	ss := maxlogic.NewGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
 	ss.AddConsumer(consumerID, nil)
-	hook.GetHookSessionManagerInstance().SetHookSession(streamName, ss)
+	maxlogic.GetGroupManagerInstance().SetGroupByStreamName(streamName, ss)
 
 	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
 		var out base.ApiStatAllGroupResp

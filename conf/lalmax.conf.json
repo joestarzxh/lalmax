@@ -21,10 +21,19 @@
         "secrets": []
       }
     },
-    "httpfmp4_config": {
-      "enable": true
+    "fmp4_config": {
+      "http": {
+        "enable": true
+      },
+      "hls": {
+        "enable": true,
+        "segment_count": 7,
+        "segment_duration": 1,
+        "part_duration": 200,
+        "low_latency": false
+      }
     },
-    "hook_config": {
+    "logic_config": {
       "gop_cache_num": 1,
       "single_gop_max_frame_num": 0
     },
