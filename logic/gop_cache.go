@@ -1,4 +1,4 @@
-package hook
+package logic
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"github.com/q191201771/lal/pkg/base"
 )
 
-// GopCache gop cache
 type GopCache struct {
 	videoheader *base.RtmpMsg
 	audioheader *base.RtmpMsg
@@ -19,10 +18,13 @@ type GopCache struct {
 	last  int
 }
 
-// NewGopCache 创建 gop 缓存
+// gopSize 为 0 时只保存音视频头，不缓存 GOP。
 func NewGopCache(gopSize, singleGopMaxFrameNum int) *GopCache {
 	if gopSize < 0 {
 		gopSize = 0
+	}
+	if singleGopMaxFrameNum < 0 {
+		singleGopMaxFrameNum = 0
 	}
 	num := gopSize + 1
 	return &GopCache{
@@ -32,7 +34,6 @@ func NewGopCache(gopSize, singleGopMaxFrameNum int) *GopCache {
 	}
 }
 
-// Feed 写入缓存
 func (c *GopCache) Feed(msg base.RtmpMsg) {
 	switch msg.Header.MsgTypeId {
 	case base.RtmpTypeIdMetadata:
@@ -95,13 +96,15 @@ func (c *GopCache) feedLastGop(msg base.RtmpMsg) {
 func (c *GopCache) isGopRingFull() bool {
 	return (c.last+1)%c.gopSize == c.first
 }
+
 func (c *GopCache) isGopRingEmpty() bool {
 	return c.first == c.last
 }
 
 func (c *GopCache) Clear() {
-	// c.audioheader = nil
-	// c.videoheader = nil
+	for i := range c.data {
+		c.data[i].release()
+	}
 	c.last = 0
 	c.first = 0
 }
@@ -117,6 +120,7 @@ func (c *GopCache) GetGopDataAt(pos int) []base.RtmpMsg {
 	return c.data[(c.first+pos)%c.gopSize].data
 }
 
+// clear 保留底层容量用于复用；release 用于码流头变化时释放旧 payload。
 type Gop struct {
 	data []base.RtmpMsg
 }
@@ -129,8 +133,16 @@ func (g *Gop) clear() {
 	if len(g.data) == 0 {
 		return
 	}
+	for i := range g.data {
+		g.data[i] = base.RtmpMsg{}
+	}
 	g.data = g.data[:0]
 }
+
+func (g *Gop) release() {
+	g.data = nil
+}
+
 func (g *Gop) size() int {
 	return len(g.data)
 }

@@ -17,7 +17,7 @@
 http://127.0.0.1:8083
 ```
 
-lalmax 自身也在 `lalmax.http_config.http_listen_addr` 上提供 `/api/stat` 和 `/api/ctrl` 兼容接口，并会补充 lalmax hook 订阅信息。只需要管理 lal 原生流状态时，可以直接使用本文档中的 lal 原生 API。
+lalmax 自身也在 `lalmax.http_config.http_listen_addr` 上提供 `/api/stat` 和 `/api/ctrl` 兼容接口，并会补充 lalmax 扩展订阅信息。只需要管理 lal 原生流状态时，可以直接使用本文档中的 lal 原生 API。
 
 ## 通用响应
 
@@ -104,6 +104,7 @@ curl "http://127.0.0.1:8083/api/stat/group?stream_name=test110"
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `stream_name` | 是 | 流名称 |
+| `app_name` | 否 | lalmax 兼容 API 可用于精确匹配扩展订阅者；lal 原生 API 当前仍主要按 `stream_name` 查询 |
 
 响应示例：
 
@@ -311,7 +312,7 @@ http://127.0.0.1:1290/api/ctrl/kick_session
 http://127.0.0.1:1290/api/ctrl/start_rtp_pub
 ```
 
-lalmax 兼容 API 的请求和响应结构与 lal 原生 API 基本一致，但会在统计结果中补充 lalmax hook 订阅者信息。控制类接口还可能受 `lalmax.http_config.ctrl_auth_whitelist` 限制。
+lalmax 兼容 API 的请求和响应结构与 lal 原生 API 基本一致，但会在统计结果中补充 lalmax 扩展订阅者信息。控制类接口还可能受 `lalmax.http_config.ctrl_auth_whitelist` 限制。
 
 ## 鉴权说明
 

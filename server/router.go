@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
 	"github.com/q191201771/lalmax/gb28181"
 
@@ -133,6 +133,7 @@ func (s *LalMaxServer) statGroupHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, v)
 		return
 	}
+	appName := c.Query("app_name")
 	v.Data = s.lalsvr.StatGroup(streamName)
 	if v.Data == nil {
 		v.ErrorCode = base.ErrorCodeGroupNotFound
@@ -140,9 +141,9 @@ func (s *LalMaxServer) statGroupHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, v)
 		return
 	}
-	exist, session := hook.GetHookSessionManagerInstance().GetHookSession(streamName)
+	exist, session := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(appName, streamName))
 	if exist {
-		v.Data.StatSubs = append(v.Data.StatSubs, session.GetAllConsumer()...)
+		v.Data.StatSubs = append(v.Data.StatSubs, session.StatSubscribers()...)
 	}
 	v.ErrorCode = base.ErrorCodeSucc
 	v.Desp = base.DespSucc
@@ -155,9 +156,9 @@ func (s *LalMaxServer) statAllGroupHandler(c *gin.Context) {
 	out.Desp = base.DespSucc
 	groups := s.lalsvr.StatAllGroup()
 	for i, group := range groups {
-		exist, session := hook.GetHookSessionManagerInstance().GetHookSession(group.StreamName)
+		exist, session := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(group.AppName, group.StreamName))
 		if exist {
-			groups[i].StatSubs = append(groups[i].StatSubs, session.GetAllConsumer()...)
+			groups[i].StatSubs = append(groups[i].StatSubs, session.StatSubscribers()...)
 		}
 	}
 	out.Data.Groups = groups

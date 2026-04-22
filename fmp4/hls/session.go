@@ -3,7 +3,7 @@ package hls
 import (
 	"time"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/bluenviron/gohlslib"
 	"github.com/bluenviron/gohlslib/pkg/codecs"
@@ -23,6 +23,7 @@ type HlsSession struct {
 	audioCodecId        int
 	videoCodecId        int
 	maxMsgSize          int
+	appName             string
 	streamName          string
 	sps                 []byte
 	pps                 []byte
@@ -35,7 +36,11 @@ type HlsSession struct {
 	SessionId           string
 }
 
-func NewHlsSession(streamName string, conf config.HlsConfig) *HlsSession {
+func NewHlsSession(streamName string, conf config.Fmp4HlsConfig) *HlsSession {
+	return NewHlsSessionWithAppName("", streamName, conf)
+}
+
+func NewHlsSessionWithAppName(appName, streamName string, conf config.Fmp4HlsConfig) *HlsSession {
 	variant := gohlslib.MuxerVariantFMP4
 	if conf.LowLatency {
 		variant = gohlslib.MuxerVariantLowLatency
@@ -51,6 +56,7 @@ func NewHlsSession(streamName string, conf config.HlsConfig) *HlsSession {
 		videoCodecId: -1,
 		maxMsgSize:   128,
 		data:         make([]Frame, 10)[0:0],
+		appName:      appName,
 		streamName:   streamName,
 		SessionId:    u.String(),
 	}
@@ -320,7 +326,7 @@ func (session *HlsSession) OnStop() {
 }
 
 func (session *HlsSession) HandleRequest(ctx *gin.Context) {
-	nazalog.Info("handle hls request, streamName:", session.streamName, " path:", ctx.Request.URL.Path)
+	nazalog.Info("handle hls request, appName:", session.appName, " streamName:", session.streamName, " path:", ctx.Request.URL.Path)
 	session.muxer.Handle(ctx.Writer, ctx.Request)
 }
 

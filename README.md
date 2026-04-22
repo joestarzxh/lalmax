@@ -26,7 +26,7 @@ docker run -it -p 1935:1935 -p 8080:8080 -p 4433:4433 -p 5544:5544 -p 8083:8083 
 
 # 架构
 
-![图片](image/init.png)
+![图片](document/images/init.png)
 
 # 支持的协议
 ## 推流

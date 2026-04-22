@@ -3,7 +3,7 @@ package srt
 import (
 	"context"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
 	srt "github.com/datarhei/gosrt"
 	"github.com/gofrs/uuid"
@@ -47,7 +47,7 @@ func NewSubscriber(ctx context.Context, conn srt.Conn, streamName string, maxSen
 }
 
 func (s *Subscriber) Run() {
-	ok, session := hook.GetHookSessionManagerInstance().GetHookSession(s.streamName)
+	ok, group := maxlogic.GetGroupManagerInstance().GetGroupByStreamName(s.streamName)
 	if ok {
 		var err error
 		sendBuf := make([]byte, 0, s.maxSendPacketSize*ts.TS_PAKCET_SIZE)
@@ -67,7 +67,7 @@ func (s *Subscriber) Run() {
 			}
 			if len(sendBuf) > (s.maxSendPacketSize-1)*ts.TS_PAKCET_SIZE {
 				if _, err = s.conn.Write(sendBuf); err != nil {
-					session.RemoveConsumer(s.subscriberId)
+					group.RemoveSubscriber(s.subscriberId)
 					return
 				}
 				sendBuf = sendBuf[0:0]
@@ -75,9 +75,12 @@ func (s *Subscriber) Run() {
 			sendBuf = append(sendBuf, tsPacket...)
 
 		}
-		session.AddConsumer(s.subscriberId, s)
+		group.AddSubscriber(maxlogic.SubscriberInfo{
+			SubscriberID: s.subscriberId,
+			Protocol:     maxlogic.SubscriberProtocolSRT,
+		}, s)
 	} else {
-		nazalog.Warnf("not found hook session, streamName:%s", s.streamName)
+		nazalog.Warnf("not found stream group, streamName:%s", s.streamName)
 		s.conn.Close()
 	}
 }
@@ -85,9 +88,9 @@ func (s *Subscriber) Run() {
 func (s *Subscriber) OnMsg(msg base.RtmpMsg) {
 	var err error
 	if !s.hasInit {
-		ok, session := hook.GetHookSessionManagerInstance().GetHookSession(s.streamName)
+		ok, group := maxlogic.GetGroupManagerInstance().GetGroupByStreamName(s.streamName)
 		if ok {
-			videoheader := session.GetVideoSeqHeaderMsg()
+			videoheader := group.GetVideoSeqHeaderMsg()
 			if videoheader != nil {
 				if videoheader.IsAvcKeySeqHeader() {
 					s.videoPid = s.muxer.AddStream(ts.TS_STREAM_H264)
@@ -107,7 +110,7 @@ func (s *Subscriber) OnMsg(msg base.RtmpMsg) {
 				}
 			}
 
-			audioheader := session.GetAudioSeqHeaderMsg()
+			audioheader := group.GetAudioSeqHeaderMsg()
 			if audioheader != nil {
 				if audioheader.IsAacSeqHeader() {
 					s.audioPid = s.muxer.AddStream(ts.TS_STREAM_AAC)

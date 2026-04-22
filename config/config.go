@@ -11,13 +11,12 @@ type Config struct {
 	SrtConfig        SrtConfig        `json:"srt_config"`      // srt配置
 	RtcConfig        RtcConfig        `json:"rtc_config"`      // rtc配置
 	HttpConfig       HttpConfig       `json:"http_config"`     // http/https配置
-	HttpFmp4Config   HttpFmp4Config   `json:"httpfmp4_config"` // http-fmp4配置
-	HlsConfig        HlsConfig        `json:"hls_config"`      // hls-fmp4/llhls配置
+	Fmp4Config       Fmp4Config       `json:"fmp4_config"`     // fmp4配置
 	GB28181Config    GB28181Config    `json:"gb28181_config"`  // gb28181配置
 	ServerId         string           `json:"server_id"`       // http 通知唯一标识
 	HttpNotifyConfig HttpNotifyConfig `json:"http_notify"`     // http 通知配置
 	LalSvrConfigPath string           `json:"lal_config_path"` // lal配置文件路径，兼容旧版配置
-	HookConfig       HookConfig       `json:"hook_config"`     // gop cache配置
+	LogicConfig      LogicConfig      `json:"logic_config"`    // 扩展流组配置
 	LalRawContent    []byte           `json:"-"`               // lal 原始配置内容
 }
 
@@ -43,17 +42,22 @@ type HttpConfig struct {
 	CtrlAuthWhitelist CtrlAuthWhitelist `json:"ctrl_auth_whitelist"`
 }
 
-// CtrlAuthWhitelist 控制类接口鉴权
+// CtrlAuthWhitelist 控制类接口鉴权。
 type CtrlAuthWhitelist struct {
 	IPs     []string // 允许访问的远程 IP，零值时不生效
 	Secrets []string // 认证信息，零值时不生效
 }
 
-type HttpFmp4Config struct {
+type Fmp4Config struct {
+	Http Fmp4HttpConfig `json:"http"`
+	Hls  Fmp4HlsConfig  `json:"hls"`
+}
+
+type Fmp4HttpConfig struct {
 	Enable bool `json:"enable"` // http-fmp4使能标志
 }
 
-type HlsConfig struct {
+type Fmp4HlsConfig struct {
 	Enable          bool `json:"enable"`           // hls使能标志
 	SegmentCount    int  `json:"segment_count"`    // 分片个数,llhls默认7个
 	SegmentDuration int  `json:"segment_duration"` // hls分片时长,默认1s
@@ -78,8 +82,9 @@ type GB28181Config struct {
 type GB28181MediaConfig struct {
 	MediaIp               string `json:"media_ip"`                 // 流媒体IP,用于在SDP中指定
 	ListenPort            uint16 `json:"listen_port"`              // tcp,udp监听端口 默认启动
-	MultiPortMaxIncrement uint16 `json:"multi_port_max_increment"` //多端口范围 ListenPort+1至ListenPort+MultiPortMax
+	MultiPortMaxIncrement uint16 `json:"multi_port_max_increment"` // 多端口范围 ListenPort+1至ListenPort+MultiPortMax
 }
+
 type HttpNotifyConfig struct {
 	Enable            bool   `json:"enable"`
 	UpdateIntervalSec int    `json:"update_interval_sec"`
@@ -95,7 +100,7 @@ type HttpNotifyConfig struct {
 	OnHlsMakeTs       string `json:"on_hls_make_ts"`
 }
 
-type HookConfig struct {
+type LogicConfig struct {
 	GopCacheNum          int `json:"gop_cache_num"`
 	SingleGopMaxFrameNum int `json:"single_gop_max_frame_num"`
 }
@@ -142,6 +147,10 @@ func unmarshalConfig(data []byte, cfg *Config) error {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return err
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
 	if cfg.LalSvrConfigPath == "" {
 		var legacy struct {
 			LalSvrConfigPath string `json:"lal_config_path:"`
@@ -150,6 +159,26 @@ func unmarshalConfig(data []byte, cfg *Config) error {
 			return err
 		}
 		cfg.LalSvrConfigPath = legacy.LalSvrConfigPath
+	}
+	if _, ok := raw["logic_config"]; !ok {
+		var legacy struct {
+			LogicConfig LogicConfig `json:"hook_config"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return err
+		}
+		cfg.LogicConfig = legacy.LogicConfig
+	}
+	if _, ok := raw["fmp4_config"]; !ok {
+		var legacy struct {
+			Http Fmp4HttpConfig `json:"httpfmp4_config"`
+			Hls  Fmp4HlsConfig  `json:"hls_config"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return err
+		}
+		cfg.Fmp4Config.Http = legacy.Http
+		cfg.Fmp4Config.Hls = legacy.Hls
 	}
 	return nil
 }

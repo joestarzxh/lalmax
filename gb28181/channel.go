@@ -10,7 +10,7 @@ import (
 
 	"github.com/q191201771/naza/pkg/nazaatomic"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 	"github.com/q191201771/lalmax/gb28181/mediaserver"
 
 	"github.com/ghettovoice/gosip/sip"

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/q191201771/naza/pkg/nazalog"

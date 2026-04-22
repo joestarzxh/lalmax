@@ -87,48 +87,53 @@
 *值举例*: ["192.168.1.2","192.168.1.3"]
 
 
-# http-fmp4配置
-主要用于设置http-fmp4相关的配置,需要配合http_config一起使用
-- enable: http-fmp4服务使能配置
+# fmp4_config
+主要用于设置 lalmax fMP4 相关能力，需要配合 `http_config` 一起使用。
+
+## http
+主要用于设置 HTTP-FMP4 相关的配置。
+
+- enable: HTTP-FMP4 服务使能配置
 
 *类型*: bool
 
 *值举例*: true
 
-# hls_config
-主要用于设置hls-fmp4/llhls相关的配置,需要配合http_config一起使用,hls-ts的能力请使用lal,这里不做过多描述
-- enable: hls-fmp4/llhls服务使能配置
+## hls
+主要用于设置 HLS-FMP4/LLHLS 相关的配置。HLS-TS 能力请使用 lal 的 `hls` 配置。
+
+- enable: HLS-FMP4/LLHLS 服务使能配置
 
 *类型*: bool
 
 *值举例*: true
 
-- segmentCount: hls-fmp4 m3u8返回的切片个数,默认为7, llhls默认设置为7个(gohlslib要求)
+- segment_count: HLS-FMP4 m3u8 返回的切片个数，默认为 7。LLHLS 默认设置为 7 个。
 
 *类型*: int
 
 *值举例*: 3
 
-- segmentDuration: hls-fmp4 切片时长,默认为1s
+- segment_duration: HLS-FMP4 切片时长，默认为 1s
 
 *类型*: int
 
 *值举例*: 3
 
-- partDuration:llhls part部分的时长,默认为200ms
+- part_duration: LLHLS part 部分的时长，默认为 200ms
 
 *类型*: int
 
 *值举例*: 100
 
-- lowLatency: llhls使能配置,开启此配置后则都走llhls
+- low_latency: LLHLS 使能配置，开启此配置后使用低延迟 HLS
 
 *类型*: bool
 
 *值举例*: true
 
-# hook_config
-主要用于 hook 相关的配置。
+# logic_config
+主要用于 lalmax 扩展流组相关的配置。
 
 - gop_cache_num: gop 缓存的数量，默认为 1
 

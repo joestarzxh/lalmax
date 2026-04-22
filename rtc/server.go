@@ -5,7 +5,7 @@ import (
 	"net"
 	"net/http"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pion/ice/v2"
@@ -121,6 +121,7 @@ func (s *RtcServer) HandleJessibuca(c *gin.Context) {
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
+	appName := c.Query("app_name")
 
 	body, err := c.GetRawData()
 	if err != nil {
@@ -141,7 +142,7 @@ func (s *RtcServer) HandleJessibuca(c *gin.Context) {
 		return
 	}
 
-	jessibucaSession := NewJessibucaSession(streamid, s.config.WriteChanSize, pc, s.lalServer)
+	jessibucaSession := NewJessibucaSession(appName, streamid, s.config.WriteChanSize, pc, s.lalServer)
 	if jessibucaSession == nil {
 		c.Status(http.StatusInternalServerError)
 		pc.Close()
@@ -167,6 +168,7 @@ func (s *RtcServer) HandleWHEP(c *gin.Context) {
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
+	appName := c.Request.URL.Query().Get("app_name")
 
 	body, err := c.GetRawData()
 	if err != nil {
@@ -187,7 +189,7 @@ func (s *RtcServer) HandleWHEP(c *gin.Context) {
 		return
 	}
 
-	whepsession := NewWhepSession(streamid, s.config.WriteChanSize, pc, s.lalServer)
+	whepsession := NewWhepSession(appName, streamid, s.config.WriteChanSize, pc, s.lalServer)
 	if whepsession == nil {
 		c.Status(http.StatusInternalServerError)
 		pc.Close()

@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/naza/pkg/nazahttp"
@@ -73,9 +73,9 @@ func (h *HttpNotify) NotifyServerStart(info base.LalInfo) {
 func (h *HttpNotify) NotifyUpdate(info base.UpdateInfo) {
 	info.ServerId = h.serverId
 	for i, v := range info.Groups {
-		exist, session := hook.GetHookSessionManagerInstance().GetHookSession(v.StreamName)
+		exist, session := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(v.AppName, v.StreamName))
 		if exist {
-			info.Groups[i].StatSubs = append(info.Groups[i].StatSubs, session.GetAllConsumer()...)
+			info.Groups[i].StatSubs = append(info.Groups[i].StatSubs, session.StatSubscribers()...)
 		}
 	}
 	h.notifyUpdateAsyncPost(h.cfg.OnUpdate, info)

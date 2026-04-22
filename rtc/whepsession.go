@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 	"github.com/smallnest/chanx"
 
 	"github.com/gofrs/uuid"
@@ -21,7 +21,7 @@ import (
 const whepMaxReplayPaceDelay = 5 * time.Millisecond
 
 type whepSession struct {
-	hooks          *hook.HookSession
+	group          *maxlogic.Group
 	pc             *peerConnection
 	subscriberId   string
 	lalServer      logic.ILalServer
@@ -39,16 +39,16 @@ type whepSession struct {
 	replayingCache bool
 }
 
-func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *whepSession {
-	ok, session := hook.GetHookSessionManagerInstance().GetHookSession(streamid)
+func NewWhepSession(appName, streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *whepSession {
+	ok, group := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(appName, streamid))
 	if !ok {
-		nazalog.Error("not found streamid:", streamid)
+		nazalog.Errorf("not found stream, appName:%s, streamid:%s", appName, streamid)
 		return nil
 	}
 
 	u, _ := uuid.NewV4()
 	return &whepSession{
-		hooks:         session,
+		group:         group,
 		pc:            pc,
 		lalServer:     lalServer,
 		subscriberId:  u.String(),
@@ -61,7 +61,7 @@ func NewWhepSession(streamid string, writeChanSize int, pc *peerConnection, lalS
 func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 	var err error
 
-	videoHeader := conn.hooks.GetVideoSeqHeaderMsg()
+	videoHeader := conn.group.GetVideoSeqHeaderMsg()
 	if videoHeader != nil {
 		if videoHeader.IsAvcKeySeqHeader() {
 			conn.videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "lalmax")
@@ -94,7 +94,7 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 		}
 	}
 
-	audioHeader := conn.hooks.GetAudioSeqHeaderMsg()
+	audioHeader := conn.group.GetAudioSeqHeaderMsg()
 	if audioHeader != nil {
 		var mimeType string
 		audioId := audioHeader.AudioCodecId()
@@ -186,11 +186,14 @@ func (conn *whepSession) Run() {
 	for {
 		select {
 		case <-conn.connectedChan:
-			conn.hooks.AddConsumer(conn.subscriberId, conn)
+			conn.group.AddSubscriber(maxlogic.SubscriberInfo{
+				SubscriberID: conn.subscriberId,
+				Protocol:     maxlogic.SubscriberProtocolWHEP,
+			}, conn)
 			goto connected
 		case <-conn.closeChan:
 			nazalog.Info("RemoveConsumer, connid:", conn.subscriberId)
-			conn.hooks.RemoveConsumer(conn.subscriberId)
+			conn.group.RemoveSubscriber(conn.subscriberId)
 			return
 		}
 	}
@@ -215,7 +218,7 @@ connected:
 			}
 		case <-conn.closeChan:
 			nazalog.Info("RemoveConsumer, connid:", conn.subscriberId)
-			conn.hooks.RemoveConsumer(conn.subscriberId)
+			conn.group.RemoveSubscriber(conn.subscriberId)
 			return
 		}
 	}

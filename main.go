@@ -12,7 +12,7 @@ import (
 
 	"github.com/q191201771/lal/pkg/base"
 
-	config "github.com/q191201771/lalmax/conf"
+	config "github.com/q191201771/lalmax/config"
 
 	"github.com/q191201771/naza/pkg/bininfo"
 )

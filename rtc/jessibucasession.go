@@ -11,13 +11,13 @@ import (
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/lal/pkg/remux"
-	"github.com/q191201771/lalmax/hook"
+	maxlogic "github.com/q191201771/lalmax/logic"
 	"github.com/q191201771/naza/pkg/nazalog"
 	"github.com/smallnest/chanx"
 )
 
 type jessibucaSession struct {
-	hooks        *hook.HookSession
+	group        *maxlogic.Group
 	pc           *peerConnection
 	subscriberId string
 	lalServer    logic.ILalServer
@@ -34,17 +34,17 @@ type jessibucaSession struct {
 	stopOne      sync.Once
 }
 
-func NewJessibucaSession(streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *jessibucaSession {
-	ok, session := hook.GetHookSessionManagerInstance().GetHookSession(streamid)
+func NewJessibucaSession(appName, streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *jessibucaSession {
+	ok, group := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(appName, streamid))
 	if !ok {
-		nazalog.Error("not found streamid:", streamid)
+		nazalog.Errorf("not found stream, appName:%s, streamid:%s", appName, streamid)
 		return nil
 	}
 
 	u, _ := uuid.NewV4()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &jessibucaSession{
-		hooks:        session,
+		group:        group,
 		pc:           pc,
 		lalServer:    lalServer,
 		subscriberId: u.String(),
@@ -95,9 +95,12 @@ func (conn *jessibucaSession) GetAnswerSDP(offer string) (sdp string) {
 }
 
 func (conn *jessibucaSession) Run() {
-	ok, _ := hook.GetHookSessionManagerInstance().GetHookSession(conn.streamId)
+	ok, _ := maxlogic.GetGroupManagerInstance().GetGroup(conn.group.Key())
 	if ok {
-		conn.hooks.AddConsumer(conn.subscriberId, conn)
+		conn.group.AddSubscriber(maxlogic.SubscriberInfo{
+			SubscriberID: conn.subscriberId,
+			Protocol:     maxlogic.SubscriberProtocolJessibuca,
+		}, conn)
 
 		conn.pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 			nazalog.Info("peer connection state: ", state.String())
@@ -121,7 +124,7 @@ func (conn *jessibucaSession) Run() {
 
 				defer func() {
 					nazalog.Info("RemoveConsumer, connid:", conn.subscriberId)
-					conn.hooks.RemoveConsumer(conn.subscriberId)
+					conn.group.RemoveSubscriber(conn.subscriberId)
 					conn.DC.Close()
 					conn.pc.Close()
 					conn.DC = nil
