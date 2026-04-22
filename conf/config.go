@@ -16,8 +16,9 @@ type Config struct {
 	GB28181Config    GB28181Config    `json:"gb28181_config"`  // gb28181配置
 	ServerId         string           `json:"server_id"`       // http 通知唯一标识
 	HttpNotifyConfig HttpNotifyConfig `json:"http_notify"`     // http 通知配置
-	LalSvrConfigPath string           `json:"lal_config_path"` // lal配置目录
+	LalSvrConfigPath string           `json:"lal_config_path"` // lal配置文件路径，兼容旧版配置
 	HookConfig       HookConfig       `json:"hook_config"`     // gop cache配置
+	LalRawContent    []byte           `json:"-"`               // lal 原始配置内容
 }
 
 type SrtConfig struct {
@@ -105,9 +106,50 @@ func Open(filepath string) error {
 		return err
 	}
 
-	err = json.Unmarshal(data, &defaultConfig)
+	err = Unmarshal(data)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func Unmarshal(data []byte) error {
+	var file struct {
+		LalMax json.RawMessage `json:"lalmax"`
+		Lal    json.RawMessage `json:"lal"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return err
+	}
+
+	var cfg Config
+	if len(file.LalMax) != 0 {
+		if err := unmarshalConfig(file.LalMax, &cfg); err != nil {
+			return err
+		}
+		cfg.LalRawContent = append([]byte(nil), file.Lal...)
+	} else {
+		if err := unmarshalConfig(data, &cfg); err != nil {
+			return err
+		}
+	}
+
+	defaultConfig = cfg
+	return nil
+}
+
+func unmarshalConfig(data []byte, cfg *Config) error {
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return err
+	}
+	if cfg.LalSvrConfigPath == "" {
+		var legacy struct {
+			LalSvrConfigPath string `json:"lal_config_path:"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return err
+		}
+		cfg.LalSvrConfigPath = legacy.LalSvrConfigPath
 	}
 	return nil
 }

@@ -38,7 +38,11 @@ type LalMaxServer struct {
 
 func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 	lalsvr := logic.NewLalServer(func(option *logic.Option) {
-		option.ConfFilename = conf.LalSvrConfigPath
+		if len(conf.LalRawContent) != 0 {
+			option.ConfRawContent = conf.LalRawContent
+		} else {
+			option.ConfFilename = conf.LalSvrConfigPath
+		}
 		option.NotifyHandler = NewHttpNotify(conf.HttpNotifyConfig, conf.ServerId)
 	})
 
