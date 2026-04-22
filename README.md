@@ -12,7 +12,7 @@ lalmax.conf.json 配置主要由 2 部分组成
 
 (1) lalmax: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181 等，具体配置说明见[config.md](./document/config.md)
 
-(2) lal: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等，具体配置说明见[lal配置](https://pengrl.com/lal/#/ConfigBrief)
+(2) lal: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等，具体配置说明见[lal_config.md](./document/lal_config.md)，原生 HTTP API 见[lal_api.md](./document/lal_api.md)
 
 旧版平铺配置和 lal_config_path 仍兼容，但推荐使用 lalmax/lal 两个顶层标签维护单个配置文件。
 
@@ -40,9 +40,7 @@ docker run -it -p 1935:1935 -p 8080:8080 -p 4433:4433 -p 5544:5544 -p 8083:8083 
 
 (5) GB28181
 
-具体的推流url地址（除了srt/whip）
-
-https://pengrl.com/lal/#/streamurllist
+具体的推流 URL 地址见[流地址说明](./document/stream_url.md)
 
 ## 拉流
 (1) RTSP
@@ -64,7 +62,7 @@ https://pengrl.com/lal/#/streamurllist
 (9) HLS(S)-FMP4/LLHLS
 
 
-具体的拉流url地址见https://pengrl.com/lal/#/streamurllist（除了srt/whep）
+具体的拉流 URL 地址见[流地址说明](./document/stream_url.md)
 
 ## [SRT](./document/srt.md)
 （1）使用gosrt库
