@@ -206,5 +206,13 @@
 
 *值举例*: true
 
+# 配置文件结构
+推荐使用单个 `lalmax.conf.json`，并按顶层标签拆分配置：
+
+- `lalmax`: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181、Hook 缓存等。
+- `lal`: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等。
+
+旧版平铺配置和 `lal_config_path` 仍兼容。新配置中如果提供了 `lal` 标签，将优先使用该标签内容作为 lal 原生配置，不再读取 `lal_config_path`。
+
 # lal_config_path
-主要设置lal配置文件的路径
+兼容旧版配置，用于设置 lal 原生配置文件的路径。推荐新配置使用顶层 `lal` 标签代替。

@@ -23,8 +23,8 @@ const httpNotifyAddr = ":55559"
 func TestMain(m *testing.M) {
 	var err error
 	max, err = NewLalMaxServer(&config.Config{
-		HttpFmp4Config:   config.HttpFmp4Config{Enable: true},
-		LalSvrConfigPath: "../conf/lalserver.conf.json",
+		HttpFmp4Config: config.HttpFmp4Config{Enable: true},
+		LalRawContent:  []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
 		HttpConfig: config.HttpConfig{
 			ListenAddr: ":52349",
 		},
@@ -96,29 +96,30 @@ func TestAllGroup(t *testing.T) {
 }
 
 func TestNotifyUpdate(t *testing.T) {
-	_, err := max.lalsvr.AddCustomizePubSession("test")
+	streamName := "notify_test"
+	consumerID := "consumer_notify"
+
+	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ss := hook.NewHookSession("test", "test", max.hlssvr, 1, 0)
-	ss.AddConsumer("consumer1", nil)
-	hook.GetHookSessionManagerInstance().SetHookSession("test", ss)
+	ss := hook.NewHookSession(streamName, streamName, max.hlssvr, 1, 0)
+	ss.AddConsumer(consumerID, nil)
+	hook.GetHookSessionManagerInstance().SetHookSession(streamName, ss)
 
 	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
 		var out base.ApiStatAllGroupResp
 		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
 			t.Fatal(err)
 		}
-		if len(out.Data.Groups) <= 0 {
-			t.Fatal("no group")
+		for _, group := range out.Data.Groups {
+			for _, sub := range group.StatSubs {
+				if sub.SessionId == consumerID {
+					return
+				}
+			}
 		}
-		if len(out.Data.Groups[0].StatSubs) <= 0 {
-			t.Fatal("subs err")
-		}
-		group := out.Data.Groups[0]
-		if group.StatSubs[0].SessionId != "consumer1" {
-			t.Fatal("SessionId err")
-		}
+		t.Fatal("SessionId err")
 	})
 	go http.ListenAndServe(httpNotifyAddr, nil)
 	time.Sleep(time.Second * 3)

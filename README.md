@@ -8,12 +8,13 @@ lalmax是在lal的基础上集成第三方库，可以提供SRT、RTC、mp4、gb
 ./run.sh或者./lalmax -c conf/lalmax.conf.json
 
 # 配置说明
-lalmax.conf.json配置主要由2部分组成
+lalmax.conf.json 配置主要由 2 部分组成
 
-(1) lal_config_path表示lal配置文件的路径,用于加载lal本身的配置,具体配置说明见[lal配置](https://pengrl.com/lal/#/ConfigBrief)
+(1) lalmax: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181 等，具体配置说明见[config.md](./document/config.md)
 
-(2) 剩余的配置则为lalmax的配置,具体配置说明见[config.md](./document/config.md)
+(2) lal: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等，具体配置说明见[lal配置](https://pengrl.com/lal/#/ConfigBrief)
 
+旧版平铺配置和 lal_config_path 仍兼容，但推荐使用 lalmax/lal 两个顶层标签维护单个配置文件。
 
 # docker运行
 ```
