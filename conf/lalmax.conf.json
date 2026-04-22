@@ -45,7 +45,7 @@
     }
   },
   "lal": {
-    "# doc of config": "https://pengrl.com/lal/#/ConfigBrief",
+    "# doc of config": "./document/lal_config.md",
     "conf_version": "v0.4.1",
     "rtmp": {
       "enable": true,
