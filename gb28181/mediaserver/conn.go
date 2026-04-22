@@ -142,7 +142,7 @@ func (c *Conn) Serve() (err error) {
 				mediaInfo, ok = c.observer.GetMediaInfoByKey(c.key)
 				if !ok {
 					nazalog.Error("get mediaInfo :", c.key)
-					return fmt.Errorf("get mediaInfo:%d", c.key)
+					return fmt.Errorf("get mediaInfo:%s", c.key)
 				}
 			}
 			c.check = true
