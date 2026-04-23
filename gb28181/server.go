@@ -182,7 +182,7 @@ func (s *GB28181Server) OnStartMediaServer(netWork string, singlePort bool, devi
 				mediasvr = mediaserver.NewGB28181MediaServer(int(s.conf.MediaConfig.ListenPort), fmt.Sprintf("%s%d", "tcp", s.conf.MediaConfig.ListenPort), s, s.lalServer)
 				listener, err = s.tcpAvailConnPool.ListenWithPort(s.conf.MediaConfig.ListenPort)
 				if err != nil {
-					nazalog.Error("gb28181 media server tcp Listen failed:%s", err.Error())
+					nazalog.Errorf("gb28181 media server tcp Listen failed:%s", err.Error())
 					return nil
 				}
 				s.MediaServerMap.Store(fmt.Sprintf("%s%d", "tcp", s.conf.MediaConfig.ListenPort), mediasvr)
@@ -190,7 +190,7 @@ func (s *GB28181Server) OnStartMediaServer(netWork string, singlePort bool, devi
 				mediasvr = mediaserver.NewGB28181MediaServer(int(s.conf.MediaConfig.ListenPort), fmt.Sprintf("%s%d", "udp", s.conf.MediaConfig.ListenPort), s, s.lalServer)
 				listener, err = s.udpAvailConnPool.ListenWithPort(s.conf.MediaConfig.ListenPort)
 				if err != nil {
-					nazalog.Error("gb28181 media server udp Listen failed:%s", err.Error())
+					nazalog.Errorf("gb28181 media server udp Listen failed:%s", err.Error())
 					return nil
 				}
 				s.MediaServerMap.Store(fmt.Sprintf("%s%d", "udp", s.conf.MediaConfig.ListenPort), mediasvr)
@@ -200,14 +200,14 @@ func (s *GB28181Server) OnStartMediaServer(netWork string, singlePort bool, devi
 			if isTcpFlag {
 				listener, port, err = s.tcpAvailConnPool.Acquire()
 				if err != nil {
-					nazalog.Error("gb28181 media server tcp acquire failed:%s", err.Error())
+					nazalog.Errorf("gb28181 media server tcp acquire failed:%s", err.Error())
 					return nil
 				}
 				mediaKey = fmt.Sprintf("%s%d", "tcp", port)
 			} else {
 				listener, port, err = s.udpAvailConnPool.Acquire()
 				if err != nil {
-					nazalog.Error("gb28181 media server udp acquire failed:%s", err.Error())
+					nazalog.Errorf("gb28181 media server udp acquire failed:%s", err.Error())
 					return nil
 				}
 				mediaKey = fmt.Sprintf("%s%d", "udp", port)
@@ -334,6 +334,9 @@ func (s *GB28181Server) NotifyClose(streamName string) {
 		}
 		return true
 	})
+}
+
+func (s *GB28181Server) OnRtpPacket(streamName string, mediaKey string) {
 }
 
 func (s *GB28181Server) startJob() {

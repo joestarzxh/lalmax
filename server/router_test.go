@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -69,9 +70,8 @@ func TestAllGroup(t *testing.T) {
 	})
 
 	t.Run("has consumer", func(t *testing.T) {
-		ss := maxlogic.NewGroupByStreamName("test", "test", max.hlssvr, 1, 0)
+		ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName("test", "test", max.hlssvr, 1, 0)
 		ss.AddConsumer("consumer1", nil)
-		maxlogic.GetGroupManagerInstance().SetGroupByStreamName("test", ss)
 
 		r := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/api/stat/all_group", nil)
@@ -105,9 +105,8 @@ func TestNotifyUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ss := maxlogic.NewGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
+	ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
 	ss.AddConsumer(consumerID, nil)
-	maxlogic.GetGroupManagerInstance().SetGroupByStreamName(streamName, ss)
 
 	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
 		var out base.ApiStatAllGroupResp
@@ -125,6 +124,47 @@ func TestNotifyUpdate(t *testing.T) {
 	})
 	go http.ListenAndServe(httpNotifyAddr, nil)
 	time.Sleep(time.Second * 3)
+}
+
+func TestRtpPubStartStop(t *testing.T) {
+	body := bytes.NewBufferString(`{"stream_name":"rtp_pub_test","port":0,"timeout_ms":0}`)
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/ctrl/start_rtp_pub", body)
+	max.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var startResp base.ApiCtrlStartRtpPubResp
+	if err := json.NewDecoder(resp.Body).Decode(&startResp); err != nil {
+		t.Fatal(err)
+	}
+	if startResp.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("start_rtp_pub failed, code=%d desp=%s", startResp.ErrorCode, startResp.Desp)
+	}
+	if startResp.Data.StreamName != "rtp_pub_test" || startResp.Data.SessionId == "" || startResp.Data.Port == 0 {
+		t.Fatalf("unexpected start_rtp_pub data: %+v", startResp.Data)
+	}
+
+	r = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/ctrl/stop_rtp_pub?stream_name=rtp_pub_test", nil)
+	max.router.ServeHTTP(r, req)
+	resp = r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var stopResp base.ApiCtrlStopRelayPullResp
+	if err := json.NewDecoder(resp.Body).Decode(&stopResp); err != nil {
+		t.Fatal(err)
+	}
+	if stopResp.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("stop_rtp_pub failed, code=%d desp=%s", stopResp.ErrorCode, stopResp.Desp)
+	}
+	if stopResp.Data.SessionId != startResp.Data.SessionId {
+		t.Fatalf("stop_rtp_pub session id = %s, want %s", stopResp.Data.SessionId, startResp.Data.SessionId)
+	}
 }
 
 func TestAuthentication(t *testing.T) {
