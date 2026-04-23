@@ -44,13 +44,14 @@ type Group struct {
 	key          StreamKey
 	consumers    sync.Map
 	hlssvr       *hls.HlsServer
+	manager      *ComplexGroupManager
 	gopCache     *GopCache
 	gopCacheMux  sync.RWMutex
 	lifecycleMux sync.RWMutex
 	stopOnce     sync.Once
 	msgMux       sync.Mutex
 	hasVideo     bool
-	closed       bool
+	closed       atomic.Bool
 }
 
 type subscriberState struct {
@@ -95,26 +96,33 @@ func (s *subscriberState) Url() string {
 	return s.key.String()
 }
 
-func NewGroup(uniqueKey string, key StreamKey, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) *Group {
+func newGroup(manager *ComplexGroupManager, uniqueKey string, key StreamKey, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) *Group {
 	group := &Group{
 		uniqueKey: uniqueKey,
 		key:       key,
 		hlssvr:    hlssvr,
+		manager:   manager,
 		gopCache:  NewGopCache(gopNum, singleGopMaxFrameNum),
-	}
-
-	if group.hlssvr != nil {
-		group.hlssvr.NewHlsSessionWithAppName(key.AppName, key.StreamName)
 	}
 
 	nazalog.Infof("create group, uniqueKey:%s, streamKey:%s", uniqueKey, key.String())
 
-	GetGroupManagerInstance().SetGroup(key, group)
 	return group
 }
 
-func NewGroupByStreamName(uniqueKey, streamName string, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) *Group {
-	return NewGroup(uniqueKey, StreamKeyFromStreamName(streamName), hlssvr, gopNum, singleGopMaxFrameNum)
+func (group *Group) initHlsSession() {
+	if group != nil && group.hlssvr != nil {
+		group.hlssvr.NewHlsSessionWithAppName(group.key.AppName, group.key.StreamName)
+	}
+}
+
+func (group *Group) waitLifecycleIdle() {
+	if group == nil {
+		return
+	}
+
+	group.lifecycleMux.RLock()
+	group.lifecycleMux.RUnlock()
 }
 
 func (group *Group) Key() StreamKey {
@@ -127,7 +135,7 @@ func (group *Group) UniqueKey() string {
 
 func (group *Group) OnMsg(msg base.RtmpMsg) {
 	group.lifecycleMux.RLock()
-	if group.closed {
+	if group.closed.Load() {
 		group.lifecycleMux.RUnlock()
 		return
 	}
@@ -164,7 +172,7 @@ func (group *Group) OnMsg(msg base.RtmpMsg) {
 func (group *Group) OnStop() {
 	group.stopOnce.Do(func() {
 		group.lifecycleMux.Lock()
-		group.closed = true
+		group.closed.Store(true)
 
 		if group.hlssvr != nil {
 			group.hlssvr.OnStopWithAppName(group.key.AppName, group.key.StreamName)
@@ -186,7 +194,9 @@ func (group *Group) OnStop() {
 			c.stopWithNotify()
 		}
 
-		GetGroupManagerInstance().RemoveGroupIfMatch(group.key, group)
+		if group.manager != nil {
+			group.manager.RemoveGroupIfMatch(group.key, group)
+		}
 	})
 }
 
@@ -204,7 +214,7 @@ func (group *Group) AddSubscriberWithReplay(info SubscriberInfo, subscriber Subs
 	}
 
 	group.lifecycleMux.RLock()
-	if group.closed {
+	if group.closed.Load() {
 		group.lifecycleMux.RUnlock()
 		nazalog.Warnf("AddSubscriber skipped, group is closed, streamKey:%s, subscriberId:%s", group.key.String(), info.SubscriberID)
 		return
@@ -328,18 +338,22 @@ func (group *Group) handleSubscriberMsg(c *subscriberState, msg base.RtmpMsg, ha
 				return
 			}
 			if v := group.GetVideoSeqHeaderMsg(); v != nil {
-				c.subscriber.OnMsg(*v)
+				if !c.deliverMsg(*v) {
+					return
+				}
 			}
 			if v := group.GetAudioSeqHeaderMsg(); v != nil && v.IsAacSeqHeader() {
-				c.subscriber.OnMsg(*v)
+				if !c.deliverMsg(*v) {
+					return
+				}
 			}
 			c.hasSendVideo = true
 		}
 
-		c.subscriber.OnMsg(msg)
+		c.deliverMsg(msg)
 	} else if msg.Header.MsgTypeId == base.RtmpTypeIdAudio {
 		if !hasVideo || c.hasSendVideo {
-			c.subscriber.OnMsg(msg)
+			c.deliverMsg(msg)
 		}
 	}
 }
@@ -359,9 +373,20 @@ func (group *Group) replayGopMessagesLocked(c *subscriberState, msgs []base.Rtmp
 	}
 
 	for _, msg := range msgs {
-		c.subscriber.OnMsg(msg)
+		if !c.deliverMsg(msg) {
+			return
+		}
 	}
 	c.hasSendVideo = true
+}
+
+func (s *subscriberState) deliverMsg(msg base.RtmpMsg) bool {
+	if s == nil || s.stopped.Load() || s.subscriber == nil {
+		return false
+	}
+
+	s.subscriber.OnMsg(msg)
+	return !s.stopped.Load() && s.subscriber != nil
 }
 
 func (s *subscriberState) stopWithNotify() {

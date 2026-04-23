@@ -7,8 +7,6 @@ import (
 
 	maxlogic "github.com/q191201771/lalmax/logic"
 
-	"github.com/q191201771/lalmax/gb28181"
-
 	"github.com/gin-gonic/gin"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
@@ -41,19 +39,6 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 
 	// hls-fmp4/llhls
 	router.GET("/live/hls/:streamid/:type", s.HandleHls)
-	// gb
-	gbLogic := gb28181.NewGbLogic(s.gbsbr)
-	gb := router.Group("/api/gb")
-	gb.GET("/device_infos", gbLogic.GetDeviceInfos)
-	gb.POST("/start_play", gbLogic.StartPlay)
-	gb.POST("/stop_play", gbLogic.StopPlay)
-	gb.POST("/update_all_notify", gbLogic.UpdateAllNotify)
-	gb.POST("/update_notify", gbLogic.UpdateNotify)
-	gb.POST("/ptz_direction", gbLogic.PtzDirection)
-	gb.POST("/ptz_zoom", gbLogic.PtzZoom)
-	gb.POST("/ptz_fi", gbLogic.PtzFi)
-	gb.POST("/ptz_preset", gbLogic.PtzPreset)
-	gb.POST("/ptz_stop", gbLogic.PtzStop)
 
 	auth := Authentication(s.conf.HttpConfig.CtrlAuthWhitelist.Secrets, s.conf.HttpConfig.CtrlAuthWhitelist.IPs)
 	// stat
@@ -68,6 +53,7 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 	ctrl.POST("/stop_relay_pull", s.ctrlStopRelayPullHandler)
 	ctrl.POST("/kick_session", s.ctrlKickSessionHandler)
 	ctrl.POST("/start_rtp_pub", s.ctrlStartRtpPubHandler)
+	ctrl.POST("/stop_rtp_pub", s.ctrlStopRtpPubHandler)
 }
 
 func (s *LalMaxServer) HandleWHIP(c *gin.Context) {
@@ -258,9 +244,44 @@ func (s *LalMaxServer) ctrlStartRtpPubHandler(c *gin.Context) {
 
 	Log.Infof("http api start rtp pub. req info=%+v", info)
 
-	lal := s.lalsvr.(*logic.ServerManager)
-	resp := lal.CtrlStartRtpPub(info)
+	resp := s.rtpPubMgr.Start(info)
 	c.JSON(http.StatusOK, resp)
+}
+
+func (s *LalMaxServer) ctrlStopRtpPubHandler(c *gin.Context) {
+	var v base.ApiCtrlStopRelayPullResp
+	streamName := c.Query("stream_name")
+	sessionID := c.Query("session_id")
+
+	if streamName == "" && sessionID == "" {
+		var info base.ApiCtrlKickSessionReq
+		if _, err := unmarshalRequestJSONBody(c.Request, &info); err == nil {
+			streamName = info.StreamName
+			sessionID = info.SessionId
+		}
+	}
+
+	if streamName == "" && sessionID == "" {
+		v.ErrorCode = base.ErrorCodeParamMissing
+		v.Desp = base.DespParamMissing
+		c.JSON(http.StatusOK, v)
+		return
+	}
+
+	Log.Infof("http api stop rtp pub. stream_name=%s, session_id=%s", streamName, sessionID)
+
+	session, err := s.rtpPubMgr.Stop(streamName, sessionID)
+	if err != nil {
+		v.ErrorCode = base.ErrorCodeSessionNotFound
+		v.Desp = err.Error()
+		c.JSON(http.StatusOK, v)
+		return
+	}
+
+	v.ErrorCode = base.ErrorCodeSucc
+	v.Desp = base.DespSucc
+	v.Data.SessionId = session.ID
+	c.JSON(http.StatusOK, v)
 }
 
 func unmarshalRequestJSONBody(r *http.Request, info interface{}, keyFieldList ...string) (nazajson.Json, error) {

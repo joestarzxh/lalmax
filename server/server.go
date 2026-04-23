@@ -9,9 +9,9 @@ import (
 
 	"github.com/q191201771/lalmax/rtc"
 
-	maxlogic "github.com/q191201771/lalmax/logic"
+	"github.com/q191201771/lalmax/gb28181/rtppub"
 
-	"github.com/q191201771/lalmax/gb28181"
+	maxlogic "github.com/q191201771/lalmax/logic"
 
 	httpfmp4 "github.com/q191201771/lalmax/fmp4/http-fmp4"
 
@@ -33,7 +33,7 @@ type LalMaxServer struct {
 	routerTls   *gin.Engine
 	httpfmp4svr *httpfmp4.HttpFmp4Server
 	hlssvr      *hls.HlsServer
-	gbsbr       *gb28181.GB28181Server
+	rtpPubMgr   *rtppub.Manager
 }
 
 func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
@@ -47,8 +47,9 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 	})
 
 	maxsvr := &LalMaxServer{
-		lalsvr: lalsvr,
-		conf:   conf,
+		lalsvr:    lalsvr,
+		conf:      conf,
+		rtpPubMgr: rtppub.NewManager(lalsvr, conf.GB28181Config.MediaConfig),
 	}
 
 	if conf.SrtConfig.Enable {
@@ -75,10 +76,6 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 		maxsvr.hlssvr = hls.NewHlsServer(conf.Fmp4Config.Hls)
 	}
 
-	if conf.GB28181Config.Enable {
-		maxsvr.gbsbr = gb28181.NewGB28181Server(conf.GB28181Config, lalsvr)
-	}
-
 	maxsvr.router = gin.Default()
 	maxsvr.InitRouter(maxsvr.router)
 	if conf.HttpConfig.EnableHttps {
@@ -91,8 +88,8 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 
 func (s *LalMaxServer) Run() (err error) {
 	s.lalsvr.WithOnHookSession(func(uniqueKey string, streamName string) logic.ICustomizeHookSessionContext {
-		// lal 有新的输入流时，创建 lalmax 扩展流组用于分发扩展协议。
-		return maxlogic.NewGroupByStreamName(uniqueKey, streamName, s.hlssvr, s.conf.LogicConfig.GopCacheNum, s.conf.LogicConfig.SingleGopMaxFrameNum)
+		group, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(uniqueKey, streamName, s.hlssvr, s.conf.LogicConfig.GopCacheNum, s.conf.LogicConfig.SingleGopMaxFrameNum)
+		return group
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -117,10 +114,6 @@ func (s *LalMaxServer) Run() (err error) {
 				nazalog.Infof("lalmax https stop. addr=%s", s.conf.HttpConfig.ListenAddr)
 			}
 		}()
-	}
-
-	if s.gbsbr != nil {
-		go s.gbsbr.Start()
 	}
 
 	return s.lalsvr.RunLoop()

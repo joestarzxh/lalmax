@@ -1,4 +1,4 @@
-package mediaserver
+package rtppush
 
 import (
 	"fmt"

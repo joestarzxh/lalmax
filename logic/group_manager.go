@@ -3,11 +3,12 @@ package logic
 import (
 	"sync"
 
+	"github.com/q191201771/lalmax/fmp4/hls"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
 
 type IGroupManager interface {
-	SetGroup(key StreamKey, group *Group)
+	GetOrCreateGroup(key StreamKey, uniqueKey string, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) (*Group, bool)
 	RemoveGroup(key StreamKey)
 	RemoveGroupIfMatch(key StreamKey, group *Group)
 	GetGroup(key StreamKey) (bool, *Group)
@@ -42,16 +43,68 @@ func GetGroupManagerInstance() *ComplexGroupManager {
 	return defaultGroupManager
 }
 
-func (m *ComplexGroupManager) SetGroup(key StreamKey, group *Group) {
+func (m *ComplexGroupManager) GetOrCreateGroup(key StreamKey, uniqueKey string, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) (*Group, bool) {
+	if m == nil || !key.Valid() {
+		return nil, false
+	}
+
+	for {
+		m.mutex.Lock()
+		ok, existing := m.getGroupLocked(key)
+		if !ok {
+			break
+		}
+		if !existing.closed.Load() {
+			m.mutex.Unlock()
+			return existing, false
+		}
+		m.mutex.Unlock()
+
+		// 等旧 group 完成 HLS 清理后再发布替换 group，
+		// 否则旧 group 的 OnStop 可能删掉新的 HLS session。
+		existing.waitLifecycleIdle()
+
+		m.mutex.Lock()
+		ok, current := m.getGroupLocked(key)
+		if !ok {
+			break
+		}
+		if current == existing {
+			break
+		}
+		if !current.closed.Load() {
+			m.mutex.Unlock()
+			return current, false
+		}
+		m.mutex.Unlock()
+	}
+
+	group := newGroup(m, uniqueKey, key, hlssvr, gopNum, singleGopMaxFrameNum)
+	group.initHlsSession()
+	m.setGroupLocked(key, group)
+	m.mutex.Unlock()
+	return group, true
+}
+
+func (m *ComplexGroupManager) GetOrCreateGroupByStreamName(uniqueKey, streamName string, hlssvr *hls.HlsServer, gopNum, singleGopMaxFrameNum int) (*Group, bool) {
+	return m.GetOrCreateGroup(StreamKeyFromStreamName(streamName), uniqueKey, hlssvr, gopNum, singleGopMaxFrameNum)
+}
+
+func (m *ComplexGroupManager) setGroup(key StreamKey, group *Group) {
 	if m == nil || !key.Valid() || group == nil {
 		return
 	}
 
-	nazalog.Info("SetGroup, streamKey:", key.String())
-
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
+	m.setGroupLocked(key, group)
+}
+
+func (m *ComplexGroupManager) setGroupLocked(key StreamKey, group *Group) {
+	nazalog.Info("SetGroup, streamKey:", key.String())
+
+	group.manager = m
 	if key.AppName == "" {
 		m.onlyStreamNameGroups[key.StreamName] = group
 		return
@@ -65,8 +118,8 @@ func (m *ComplexGroupManager) SetGroup(key StreamKey, group *Group) {
 	groups[key.StreamName] = group
 }
 
-func (m *ComplexGroupManager) SetGroupByStreamName(streamName string, group *Group) {
-	m.SetGroup(StreamKeyFromStreamName(streamName), group)
+func (m *ComplexGroupManager) setGroupByStreamName(streamName string, group *Group) {
+	m.setGroup(StreamKeyFromStreamName(streamName), group)
 }
 
 func (m *ComplexGroupManager) RemoveGroup(key StreamKey) {
@@ -130,11 +183,15 @@ func (m *ComplexGroupManager) GetGroup(key StreamKey) (bool, *Group) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
+	return m.getGroupLocked(key)
+}
+
+func (m *ComplexGroupManager) getGroupLocked(key StreamKey) (bool, *Group) {
 	if key.AppName == "" {
 		if group, ok := m.onlyStreamNameGroups[key.StreamName]; ok {
 			return true, group
 		}
-		return m.getGroupByOnlyStreamName(key.StreamName)
+		return m.getGroupByOnlyStreamNameLocked(key.StreamName)
 	}
 
 	if groups, ok := m.appNameStreamNameGroups[key.AppName]; ok {
@@ -155,7 +212,7 @@ func (m *ComplexGroupManager) GetGroupByStreamName(streamName string) (bool, *Gr
 }
 
 // streamName 单独查找只在匹配唯一 appName 时成功，避免跨 app 串流。
-func (m *ComplexGroupManager) getGroupByOnlyStreamName(streamName string) (bool, *Group) {
+func (m *ComplexGroupManager) getGroupByOnlyStreamNameLocked(streamName string) (bool, *Group) {
 	var found *Group
 	matchCount := 0
 	for _, groups := range m.appNameStreamNameGroups {

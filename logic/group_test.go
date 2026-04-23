@@ -99,6 +99,39 @@ func (s *blockingSubscriber) markers() []byte {
 	return out
 }
 
+type selfRemovingSubscriber struct {
+	group *Group
+	id    string
+
+	mu   sync.Mutex
+	msgs []base.RtmpMsg
+}
+
+func (s *selfRemovingSubscriber) OnMsg(msg base.RtmpMsg) {
+	s.mu.Lock()
+	s.msgs = append(s.msgs, msg.Clone())
+	shouldRemove := len(s.msgs) == 1
+	s.mu.Unlock()
+
+	if shouldRemove {
+		s.group.RemoveConsumer(s.id)
+	}
+}
+
+func (s *selfRemovingSubscriber) OnStop() {}
+
+func (s *selfRemovingSubscriber) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.msgs)
+}
+
+func (s *selfRemovingSubscriber) markerAt(idx int) byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return payloadMarker(s.msgs[idx])
+}
+
 func videoSeqHeader(marker byte) base.RtmpMsg {
 	return base.RtmpMsg{
 		Header: base.RtmpHeader{MsgTypeId: base.RtmpTypeIdVideo},
@@ -168,8 +201,13 @@ func payloadMarker(msg base.RtmpMsg) byte {
 	return msg.Payload[len(msg.Payload)-1]
 }
 
+func newTestGroup(streamName string) *Group {
+	group, _ := GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, nil, 1, 0)
+	return group
+}
+
 func TestAddConsumerReplaysCachedGopImmediately(t *testing.T) {
-	group := NewGroupByStreamName("test-replay", "test-replay", nil, 1, 0)
+	group := newTestGroup("test-replay")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-replay")
 
 	group.OnMsg(videoSeqHeader(1))
@@ -194,7 +232,7 @@ func TestAddConsumerReplaysCachedGopImmediately(t *testing.T) {
 }
 
 func TestVideoSeqHeaderChangeClearsStaleGop(t *testing.T) {
-	group := NewGroupByStreamName("test-clear", "test-clear", nil, 1, 0)
+	group := newTestGroup("test-clear")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-clear")
 
 	group.OnMsg(videoSeqHeader(1))
@@ -221,7 +259,7 @@ func TestVideoSeqHeaderChangeClearsStaleGop(t *testing.T) {
 }
 
 func TestNonAacAudioIsNotReplayedAsHeader(t *testing.T) {
-	group := NewGroupByStreamName("test-g711", "test-g711", nil, 1, 0)
+	group := newTestGroup("test-g711")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-g711")
 
 	group.OnMsg(videoSeqHeader(1))
@@ -244,7 +282,7 @@ func TestNonAacAudioIsNotReplayedAsHeader(t *testing.T) {
 }
 
 func TestAddConsumerWithReplayDisabledDoesNotReplayCachedGop(t *testing.T) {
-	group := NewGroupByStreamName("test-no-replay", "test-no-replay", nil, 1, 0)
+	group := newTestGroup("test-no-replay")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-no-replay")
 
 	group.OnMsg(videoSeqHeader(1))
@@ -276,7 +314,7 @@ func TestAddConsumerWithReplayDisabledDoesNotReplayCachedGop(t *testing.T) {
 }
 
 func TestAddConsumerReplayDoesNotInterleaveWithLiveKeyFrame(t *testing.T) {
-	group := NewGroupByStreamName("test-replay-order", "test-replay-order", nil, 1, 0)
+	group := newTestGroup("test-replay-order")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-replay-order")
 
 	group.OnMsg(videoSeqHeader(1))
@@ -320,11 +358,54 @@ func TestAddConsumerReplayDoesNotInterleaveWithLiveKeyFrame(t *testing.T) {
 	}
 }
 
+func TestSubscriberRemovingItselfStopsReplayDelivery(t *testing.T) {
+	group := newTestGroup("test-self-remove-replay")
+	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-self-remove-replay")
+
+	group.OnMsg(videoSeqHeader(1))
+	group.OnMsg(videoKeyNalu(2))
+	group.OnMsg(videoInterNalu(3))
+
+	sub := &selfRemovingSubscriber{group: group, id: "consumer"}
+	group.AddConsumer(sub.id, sub)
+
+	if sub.len() != 1 {
+		t.Fatalf("messages after self remove = %d, want 1", sub.len())
+	}
+	if got := sub.markerAt(0); got != 1 {
+		t.Fatalf("first marker = %d, want 1", got)
+	}
+
+	group.OnMsg(videoKeyNalu(4))
+	if sub.len() != 1 {
+		t.Fatalf("messages after live frame = %d, want 1", sub.len())
+	}
+}
+
+func TestSubscriberRemovingItselfStopsHeaderAndLiveDelivery(t *testing.T) {
+	group := newTestGroup("test-self-remove-live")
+	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-self-remove-live")
+
+	group.OnMsg(videoSeqHeader(1))
+	group.OnMsg(aacSeqHeader(2))
+
+	sub := &selfRemovingSubscriber{group: group, id: "consumer"}
+	group.AddConsumerWithReplay(sub.id, sub, false)
+
+	group.OnMsg(videoKeyNalu(3))
+	if sub.len() != 1 {
+		t.Fatalf("messages after self remove = %d, want 1", sub.len())
+	}
+	if got := sub.markerAt(0); got != 1 {
+		t.Fatalf("first marker = %d, want 1", got)
+	}
+}
+
 func TestGroupManagerSupportsAppNameAndStreamName(t *testing.T) {
 	manager := NewComplexGroupManager()
 	group := &Group{key: NewStreamKey("live", "camera")}
 
-	manager.SetGroup(group.Key(), group)
+	manager.setGroup(group.Key(), group)
 
 	ok, got := manager.GetGroup(NewStreamKey("live", "camera"))
 	if !ok || got != group {
@@ -339,12 +420,103 @@ func TestGroupManagerSupportsAppNameAndStreamName(t *testing.T) {
 
 func TestGroupManagerStreamNameFallbackRejectsAmbiguousAppName(t *testing.T) {
 	manager := NewComplexGroupManager()
-	manager.SetGroup(NewStreamKey("app1", "camera"), &Group{key: NewStreamKey("app1", "camera")})
-	manager.SetGroup(NewStreamKey("app2", "camera"), &Group{key: NewStreamKey("app2", "camera")})
+	manager.setGroup(NewStreamKey("app1", "camera"), &Group{key: NewStreamKey("app1", "camera")})
+	manager.setGroup(NewStreamKey("app2", "camera"), &Group{key: NewStreamKey("app2", "camera")})
 
 	ok, got := manager.GetGroup(StreamKeyFromStreamName("camera"))
 	if ok || got != nil {
 		t.Fatal("expected ambiguous streamName-only lookup to fail")
+	}
+}
+
+func TestGroupManagerGetOrCreateGroupReturnsExisting(t *testing.T) {
+	manager := NewComplexGroupManager()
+	key := NewStreamKey("live", "camera")
+
+	group, created := manager.GetOrCreateGroup(key, "first", nil, 1, 0)
+	if !created || group == nil {
+		t.Fatal("expected group to be created")
+	}
+
+	got, created := manager.GetOrCreateGroup(key, "second", nil, 1, 0)
+	if created || got != group {
+		t.Fatal("expected existing group to be returned")
+	}
+	if got.UniqueKey() != "first" {
+		t.Fatalf("unique key = %s, want first", got.UniqueKey())
+	}
+}
+
+func TestGroupManagerGetOrCreateWaitsForClosedGroupCleanup(t *testing.T) {
+	manager := NewComplexGroupManager()
+	key := StreamKeyFromStreamName("camera")
+	oldGroup := &Group{key: key}
+	oldGroup.closed.Store(true)
+	manager.setGroup(key, oldGroup)
+
+	oldGroup.lifecycleMux.Lock()
+	done := make(chan struct {
+		group   *Group
+		created bool
+	})
+	go func() {
+		group, created := manager.GetOrCreateGroup(key, "new", nil, 1, 0)
+		done <- struct {
+			group   *Group
+			created bool
+		}{group: group, created: created}
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("new group should wait for old group cleanup")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	oldGroup.lifecycleMux.Unlock()
+
+	select {
+	case result := <-done:
+		if !result.created || result.group == nil || result.group == oldGroup {
+			t.Fatalf("unexpected group result: group=%p created=%v", result.group, result.created)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new group was not created after old group cleanup")
+	}
+}
+
+func TestGroupManagerGetOrCreateReturnsReplacementAfterWaitingClosedGroup(t *testing.T) {
+	manager := NewComplexGroupManager()
+	key := StreamKeyFromStreamName("camera")
+	oldGroup := &Group{key: key}
+	replacement := &Group{key: key}
+	oldGroup.closed.Store(true)
+	manager.setGroup(key, oldGroup)
+
+	oldGroup.lifecycleMux.Lock()
+	done := make(chan struct {
+		group   *Group
+		created bool
+	})
+	go func() {
+		group, created := manager.GetOrCreateGroup(key, "new", nil, 1, 0)
+		done <- struct {
+			group   *Group
+			created bool
+		}{group: group, created: created}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	manager.setGroup(key, replacement)
+	oldGroup.lifecycleMux.Unlock()
+
+	select {
+	case result := <-done:
+		if result.created || result.group != replacement {
+			t.Fatalf("unexpected group result: group=%p replacement=%p created=%v", result.group, replacement, result.created)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement group was not returned after old group cleanup")
 	}
 }
 
@@ -354,8 +526,8 @@ func TestGroupManagerRemoveGroupIfMatchDoesNotRemoveNewGroup(t *testing.T) {
 	oldGroup := &Group{key: key}
 	newGroup := &Group{key: key}
 
-	manager.SetGroup(key, oldGroup)
-	manager.SetGroup(key, newGroup)
+	manager.setGroup(key, oldGroup)
+	manager.setGroup(key, newGroup)
 	manager.RemoveGroupIfMatch(key, oldGroup)
 
 	ok, got := manager.GetGroup(key)
@@ -370,12 +542,12 @@ func TestGroupManagerIterateRemoveDoesNotRemoveReplacement(t *testing.T) {
 	oldGroup := &Group{key: key}
 	newGroup := &Group{key: key}
 
-	manager.SetGroup(key, oldGroup)
+	manager.setGroup(key, oldGroup)
 	manager.Iterate(func(iterKey StreamKey, group *Group) bool {
 		if iterKey != key || group != oldGroup {
 			t.Fatalf("unexpected iterate entry, key=%v group=%p", iterKey, group)
 		}
-		manager.SetGroup(key, newGroup)
+		manager.setGroup(key, newGroup)
 		return false
 	})
 
@@ -415,7 +587,7 @@ func TestGopCacheNegativeFrameLimitMeansUnlimited(t *testing.T) {
 }
 
 func TestOnStopIsIdempotentAndClosesSubscribers(t *testing.T) {
-	group := NewGroupByStreamName("test-stop", "test-stop", nil, 1, 0)
+	group := newTestGroup("test-stop")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-stop")
 
 	sub := &recordSubscriber{}
@@ -435,7 +607,7 @@ func TestOnStopIsIdempotentAndClosesSubscribers(t *testing.T) {
 }
 
 func TestAddSubscriberAfterStopIsIgnored(t *testing.T) {
-	group := NewGroupByStreamName("test-add-after-stop", "test-add-after-stop", nil, 1, 0)
+	group := newTestGroup("test-add-after-stop")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-add-after-stop")
 
 	group.OnStop()
@@ -453,7 +625,7 @@ func TestAddSubscriberAfterStopIsIgnored(t *testing.T) {
 }
 
 func TestDuplicateSubscriberIDIsIgnored(t *testing.T) {
-	group := NewGroupByStreamName("test-duplicate", "test-duplicate", nil, 1, 0)
+	group := newTestGroup("test-duplicate")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-duplicate")
 
 	first := &recordSubscriber{}

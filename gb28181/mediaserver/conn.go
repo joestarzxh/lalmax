@@ -51,9 +51,11 @@ type Conn struct {
 	buffer *bytes.Buffer
 	key    string
 
-	mediaServer *GB28181MediaServer
-	one         sync.Once
-	oneSaveConn sync.Once
+	mediaServer          *GB28181MediaServer
+	preferMediaKeyLookup bool
+	readTimeout          time.Duration
+	one                  sync.Once
+	oneSaveConn          sync.Once
 }
 
 func NewConn(conn net.Conn, observer IGbObserver, lal logic.ILalServer) *Conn {
@@ -76,12 +78,18 @@ func (c *Conn) SetMediaServer(mediaServer *GB28181MediaServer) {
 func (c *Conn) SetKey(key string) {
 	c.key = key
 }
+func (c *Conn) SetPreferMediaKeyLookup(prefer bool) {
+	c.preferMediaKeyLookup = prefer
+}
+func (c *Conn) SetReadTimeout(timeout time.Duration) {
+	c.readTimeout = timeout
+}
 func (c *Conn) Serve() (err error) {
 	defer func() {
 		nazalog.Info("conn close, err:", err)
 		c.Close()
 
-		if c.observer != nil {
+		if c.observer != nil && c.streamName != "" {
 			c.observer.NotifyClose(c.streamName)
 		}
 		if c.psDumpFile != nil {
@@ -95,7 +103,9 @@ func (c *Conn) Serve() (err error) {
 	nazalog.Info("gb28181 conn, remoteaddr:", c.conn.RemoteAddr().String(), " localaddr:", c.conn.LocalAddr().String())
 
 	for {
-		c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if c.readTimeout > 0 {
+			c.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+		}
 		pkt := &rtp.Packet{}
 		if c.conn.RemoteAddr().Network() == "udp" {
 			buf := make([]byte, 1472*4)
@@ -132,7 +142,13 @@ func (c *Conn) Serve() (err error) {
 		if !c.check && c.observer != nil {
 			var mediaInfo *MediaInfo
 			var ok bool
-			if pkt.SSRC != 0 {
+			if c.preferMediaKeyLookup {
+				mediaInfo, ok = c.observer.GetMediaInfoByKey(c.key)
+				if !ok {
+					nazalog.Error("get mediaInfo :", c.key)
+					return fmt.Errorf("get mediaInfo:%s", c.key)
+				}
+			} else if pkt.SSRC != 0 {
 				mediaInfo, ok = c.observer.CheckSsrc(pkt.SSRC)
 				if !ok {
 					nazalog.Error("invalid ssrc:", pkt.SSRC)
@@ -159,6 +175,9 @@ func (c *Conn) Serve() (err error) {
 				}
 			}
 			nazalog.Info("gb28181 ssrc check success, streamName:", c.streamName)
+			if c.observer != nil {
+				c.observer.OnRtpPacket(c.streamName, c.key)
+			}
 
 			session, err := c.lalServer.AddCustomizePubSession(mediaInfo.StreamName)
 			if err != nil {
@@ -174,6 +193,9 @@ func (c *Conn) Serve() (err error) {
 			c.lalSession = session
 		}
 		c.rtpPts = uint64(pkt.Header.Timestamp)
+		if c.observer != nil && c.streamName != "" {
+			c.observer.OnRtpPacket(c.streamName, c.key)
+		}
 		if c.demuxer != nil {
 			if c.psDumpFile != nil {
 				c.psDumpFile.WriteWithType(pkt.Payload, base.DumpTypePsRtpData)
