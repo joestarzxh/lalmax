@@ -147,6 +147,61 @@
 
 *值举例*: 120
 
+# http_notify
+主要用于设置 hook 事件对外转发配置。当前既支持 `lal` 原生 notify 事件，也支持 `lalmax` 自己基于聚合状态派生的事件。
+
+- enable: 是否启用内置 HTTP notify 插件
+
+*类型*: bool
+
+*值举例*: true
+
+- update_interval_sec: `on_update` 的周期秒数。`lalmax` 会按这个周期采集当前 group 快照并发出 `on_update`
+
+*类型*: int
+
+*值举例*: 5
+
+说明：
+
+- 该值控制周期性 `on_update`
+- 启动阶段上游 `lal` 仍可能先产生一次初始快照 `on_update`
+
+- on_update: 接收聚合后全量 group 快照的回调地址
+
+*类型*: string
+
+*值举例*: "http://127.0.0.1:10101/on_update"
+
+- on_group_start: 接收 group/流开始进入 `lalmax` 统一输入流生命周期时的回调地址
+
+*类型*: string
+
+*值举例*: "http://127.0.0.1:10101/on_group_start"
+
+- on_group_stop: 接收 group/流从 `lalmax` 统一输入流生命周期中结束时的回调地址
+
+*类型*: string
+
+*值举例*: "http://127.0.0.1:10101/on_group_stop"
+
+- on_stream_active: 接收 group/流收到首个音频或视频消息时的回调地址，只触发一次
+
+*类型*: string
+
+*值举例*: "http://127.0.0.1:10101/on_stream_active"
+
+- on_pub_start / on_pub_stop / on_sub_start / on_sub_stop / on_relay_pull_start / on_relay_pull_stop / on_rtmp_connect / on_server_start / on_hls_make_ts
+
+*类型*: string
+
+说明：各自对应原有 hook 事件回调地址。
+
+建议：
+
+- 对外统一只配置 `lalmax.http_notify`
+- `lal` 配置段中的原生 `http_notify` 建议保持关闭；如果两边同时配置，尤其都启用了 `update_interval_sec`，可能出现重复 webhook
+
 
 # gb28181_config
 
@@ -216,6 +271,11 @@
 
 - `lalmax`: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181、Hook 缓存等。
 - `lal`: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等。
+
+关于 Hook API、Hook 插件化和统一事件分发架构，另见：
+
+- [hook_api.md](./hook_api.md)
+- [hook_plugin_architecture.md](./hook_plugin_architecture.md)
 
 旧版平铺配置和 `lal_config_path` 仍兼容。新配置中如果提供了 `lal` 标签，将优先使用该标签内容作为 lal 原生配置，不再读取 `lal_config_path`。
 

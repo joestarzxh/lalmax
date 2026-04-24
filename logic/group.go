@@ -40,18 +40,24 @@ type SubscriberInfo struct {
 
 // Group 只维护 lalmax 侧订阅者和回放缓存，推流状态仍以 lal 为准。
 type Group struct {
-	uniqueKey    string
-	key          StreamKey
-	consumers    sync.Map
-	hlssvr       *hls.HlsServer
-	manager      *ComplexGroupManager
-	gopCache     *GopCache
-	gopCacheMux  sync.RWMutex
-	lifecycleMux sync.RWMutex
-	stopOnce     sync.Once
-	msgMux       sync.Mutex
-	hasVideo     bool
-	closed       atomic.Bool
+	uniqueKey      string
+	key            StreamKey
+	consumers      sync.Map
+	hlssvr         *hls.HlsServer
+	manager        *ComplexGroupManager
+	hookMux        sync.RWMutex
+	activeHookKey  StreamKey
+	onActiveHook   func(StreamKey)
+	stopHookKey    StreamKey
+	onStopHook     func(StreamKey)
+	gopCache       *GopCache
+	gopCacheMux    sync.RWMutex
+	lifecycleMux   sync.RWMutex
+	stopOnce       sync.Once
+	msgMux         sync.Mutex
+	activeHookSent bool
+	hasVideo       bool
+	closed         atomic.Bool
 }
 
 type subscriberState struct {
@@ -133,6 +139,28 @@ func (group *Group) UniqueKey() string {
 	return group.uniqueKey
 }
 
+func (group *Group) BindStopHook(key StreamKey, onStop func(StreamKey)) {
+	if group == nil {
+		return
+	}
+
+	group.hookMux.Lock()
+	group.stopHookKey = key
+	group.onStopHook = onStop
+	group.hookMux.Unlock()
+}
+
+func (group *Group) BindActiveHook(key StreamKey, onActive func(StreamKey)) {
+	if group == nil {
+		return
+	}
+
+	group.hookMux.Lock()
+	group.activeHookKey = key
+	group.onActiveHook = onActive
+	group.hookMux.Unlock()
+}
+
 func (group *Group) OnMsg(msg base.RtmpMsg) {
 	group.lifecycleMux.RLock()
 	if group.closed.Load() {
@@ -147,6 +175,7 @@ func (group *Group) OnMsg(msg base.RtmpMsg) {
 
 	group.msgMux.Lock()
 	hasVideo := group.hasVideo
+	shouldNotifyActive := false
 	consumers := make([]*subscriberState, 0)
 	group.consumers.Range(func(key, value interface{}) bool {
 		if c, ok := value.(*subscriberState); ok {
@@ -158,14 +187,39 @@ func (group *Group) OnMsg(msg base.RtmpMsg) {
 	if !group.hasVideo && msg.IsVideoKeyNalu() {
 		group.hasVideo = true
 	}
+	if !group.activeHookSent && isActiveMediaMsg(msg) {
+		group.activeHookSent = true
+		shouldNotifyActive = true
+	}
 
 	group.gopCacheMux.Lock()
 	group.gopCache.Feed(msg)
 	group.gopCacheMux.Unlock()
 	group.msgMux.Unlock()
 
+	if shouldNotifyActive {
+		group.hookMux.RLock()
+		activeHookKey := group.activeHookKey
+		onActiveHook := group.onActiveHook
+		group.hookMux.RUnlock()
+		if onActiveHook != nil {
+			onActiveHook(activeHookKey)
+		}
+	}
+
 	for _, c := range consumers {
 		group.handleSubscriberMsg(c, msg, hasVideo)
+	}
+}
+
+func isActiveMediaMsg(msg base.RtmpMsg) bool {
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdAudio:
+		return !msg.IsAacSeqHeader()
+	case base.RtmpTypeIdVideo:
+		return !msg.IsVideoKeySeqHeader()
+	default:
+		return false
 	}
 }
 
@@ -196,6 +250,14 @@ func (group *Group) OnStop() {
 
 		if group.manager != nil {
 			group.manager.RemoveGroupIfMatch(group.key, group)
+		}
+
+		group.hookMux.RLock()
+		stopHookKey := group.stopHookKey
+		onStopHook := group.onStopHook
+		group.hookMux.RUnlock()
+		if onStopHook != nil {
+			onStopHook(stopHookKey)
 		}
 	})
 }

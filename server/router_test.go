@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,11 +16,35 @@ import (
 	config "github.com/q191201771/lalmax/config"
 
 	"github.com/q191201771/lal/pkg/base"
+	baseLogic "github.com/q191201771/lal/pkg/logic"
 )
+
+type testHookPlugin struct {
+	name   string
+	events chan HookEvent
+}
+
+func (p *testHookPlugin) Name() string {
+	return p.name
+}
+
+func (p *testHookPlugin) OnHookEvent(event HookEvent) error {
+	p.events <- event
+	return nil
+}
 
 var max *LalMaxServer
 
 const httpNotifyAddr = ":55559"
+
+func findTestGroup(groups []LalmaxStatGroup, streamName string) *LalmaxStatGroup {
+	for i := range groups {
+		if groups[i].StreamName == streamName {
+			return &groups[i]
+		}
+	}
+	return nil
+}
 
 func TestMain(m *testing.M) {
 	var err error
@@ -45,7 +70,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestAllGroup(t *testing.T) {
-	_, err := max.lalsvr.AddCustomizePubSession("test")
+	streamName := "test_all_group"
+	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,20 +83,24 @@ func TestAllGroup(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Fatal(resp.Status)
 		}
-		var out base.ApiStatAllGroupResp
+		var out ApiStatAllGroupResp
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			t.Fatal(err)
 		}
-		if len(out.Data.Groups) <= 0 {
+		group := findTestGroup(out.Data.Groups, streamName)
+		if group == nil {
 			t.Fatal("no group")
 		}
-		if len(out.Data.Groups[0].StatSubs) != 0 {
+		if len(group.StatSubs) != 0 {
 			t.Fatal("subs err")
+		}
+		if len(group.Lalmax.ExtSubs) != 0 {
+			t.Fatal("lalmax ext_subs err")
 		}
 	})
 
 	t.Run("has consumer", func(t *testing.T) {
-		ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName("test", "test", max.hlssvr, 1, 0)
+		ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
 		ss.AddConsumer("consumer1", nil)
 
 		r := httptest.NewRecorder()
@@ -80,19 +110,25 @@ func TestAllGroup(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Fatal(resp.Status)
 		}
-		var out base.ApiStatAllGroupResp
+		var out ApiStatAllGroupResp
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			t.Fatal(err)
 		}
-		if len(out.Data.Groups) <= 0 {
+		group := findTestGroup(out.Data.Groups, streamName)
+		if group == nil {
 			t.Fatal("no group")
 		}
-		if len(out.Data.Groups[0].StatSubs) <= 0 {
+		if len(group.StatSubs) <= 0 {
 			t.Fatal("subs err")
 		}
-		group := out.Data.Groups[0]
+		if len(group.Lalmax.ExtSubs) != 1 {
+			t.Fatalf("unexpected lalmax ext_subs len: %d", len(group.Lalmax.ExtSubs))
+		}
 		if group.StatSubs[0].SessionId != "consumer1" {
 			t.Fatal("SessionId err")
+		}
+		if group.Lalmax.ExtSubs[0].SessionId != "consumer1" {
+			t.Fatal("lalmax ext SessionId err")
 		}
 	})
 }
@@ -109,11 +145,11 @@ func TestNotifyUpdate(t *testing.T) {
 	ss.AddConsumer(consumerID, nil)
 
 	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
-		var out base.ApiStatAllGroupResp
+		var out base.UpdateInfo
 		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
 			t.Fatal(err)
 		}
-		for _, group := range out.Data.Groups {
+		for _, group := range out.Groups {
 			for _, sub := range group.StatSubs {
 				if sub.SessionId == consumerID {
 					return
@@ -164,6 +200,434 @@ func TestRtpPubStartStop(t *testing.T) {
 	}
 	if stopResp.Data.SessionId != startResp.Data.SessionId {
 		t.Fatalf("stop_rtp_pub session id = %s, want %s", stopResp.Data.SessionId, startResp.Data.SessionId)
+	}
+}
+
+func TestStatGroupWithAppName(t *testing.T) {
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/stat/group?stream_name=test&app_name=missing", nil)
+	max.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out ApiStatGroupResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ErrorCode != base.ErrorCodeGroupNotFound {
+		t.Fatalf("unexpected error code: %+v", out)
+	}
+}
+
+func TestStatGroupIncludesLalmaxExtSubs(t *testing.T) {
+	streamName := "test_stat_group_ext"
+
+	_, err := max.lalsvr.AddCustomizePubSession(streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
+	ss.AddConsumer("consumer-stat-group", nil)
+
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/stat/group?stream_name="+streamName, nil)
+	max.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out ApiStatGroupResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+	if out.Data == nil {
+		t.Fatal("group data is nil")
+	}
+	if len(out.Data.StatSubs) == 0 {
+		t.Fatal("subs err")
+	}
+	if len(out.Data.Lalmax.ExtSubs) != 1 {
+		t.Fatalf("unexpected lalmax ext_subs len: %d", len(out.Data.Lalmax.ExtSubs))
+	}
+	if out.Data.Lalmax.ExtSubs[0].SessionId != "consumer-stat-group" {
+		t.Fatalf("unexpected ext sub: %+v", out.Data.Lalmax.ExtSubs[0])
+	}
+}
+
+func TestStopRelayPullAllowsGet(t *testing.T) {
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/ctrl/stop_relay_pull?stream_name=missing", nil)
+	max.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out base.ApiCtrlStopRelayPullResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ErrorCode != base.ErrorCodeGroupNotFound {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+}
+
+func TestHookHubRecentAndSubscribe(t *testing.T) {
+	hub := NewHttpNotify(config.HttpNotifyConfig{}, "hub-test")
+	_, ch, cancel := hub.Subscribe(1)
+	defer cancel()
+
+	hub.NotifyPubStart(base.PubStartInfo{})
+
+	select {
+	case event := <-ch:
+		if event.Event != HookEventPubStart {
+			t.Fatalf("unexpected event: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait hook event timeout")
+	}
+
+	events := hub.Recent(1)
+	if len(events) != 1 {
+		t.Fatalf("unexpected recent len: %d", len(events))
+	}
+	if events[0].Event != HookEventPubStart {
+		t.Fatalf("unexpected recent event: %+v", events[0])
+	}
+}
+
+func TestHookGroupEventsFromDirectLifecycle(t *testing.T) {
+	svr, err := NewLalMaxServer(&config.Config{
+		LalRawContent: []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
+		HttpConfig: config.HttpConfig{
+			ListenAddr: ":52353",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svr.lalsvr.WithOnHookSession(func(uniqueKey string, streamName string) baseLogic.ICustomizeHookSessionContext {
+		key := maxlogic.StreamKeyFromStreamName(streamName)
+		group, created := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(uniqueKey, streamName, svr.hlssvr, svr.conf.LogicConfig.GopCacheNum, svr.conf.LogicConfig.SingleGopMaxFrameNum)
+		group.BindStopHook(key, func(stopKey maxlogic.StreamKey) {
+			svr.notifyHub.NotifyGroupStop(HookGroupInfo{
+				AppName:    stopKey.AppName,
+				StreamName: stopKey.StreamName,
+			})
+		})
+		if created {
+			svr.notifyHub.NotifyGroupStart(HookGroupInfo{
+				AppName:    key.AppName,
+				StreamName: key.StreamName,
+			})
+		}
+		return group
+	})
+
+	streamName := "direct-group-lifecycle"
+	session, err := svr.lalsvr.AddCustomizePubSession(streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svr.lalsvr.DelCustomizePubSession(session)
+
+	filter := NewHookEventFilter("", streamName, "", []string{HookEventGroupStart, HookEventGroupStop})
+	events := svr.notifyHub.RecentFiltered(10, filter)
+	if len(events) != 2 {
+		t.Fatalf("unexpected event len: %d", len(events))
+	}
+	if events[0].Event != HookEventGroupStart {
+		t.Fatalf("unexpected first event: %+v", events[0])
+	}
+	if events[1].Event != HookEventGroupStop {
+		t.Fatalf("unexpected second event: %+v", events[1])
+	}
+
+	var start HookGroupInfo
+	if err := json.Unmarshal(events[0].Payload, &start); err != nil {
+		t.Fatal(err)
+	}
+	if start.StreamName != streamName {
+		t.Fatalf("unexpected start payload: %+v", start)
+	}
+
+	var stop HookGroupInfo
+	if err := json.Unmarshal(events[1].Payload, &stop); err != nil {
+		t.Fatal(err)
+	}
+	if stop.StreamName != streamName {
+		t.Fatalf("unexpected stop payload: %+v", stop)
+	}
+}
+
+func TestHookHubStreamActiveEvent(t *testing.T) {
+	hub := NewHttpNotify(config.HttpNotifyConfig{}, "hub-test")
+
+	hub.NotifyStreamActive(HookGroupInfo{
+		AppName:    "live",
+		StreamName: "stream-active",
+	})
+
+	filter := NewHookEventFilter("live", "stream-active", "", []string{HookEventStreamActive})
+	events := hub.RecentFiltered(10, filter)
+	if len(events) != 1 {
+		t.Fatalf("unexpected event len: %d", len(events))
+	}
+	if events[0].Event != HookEventStreamActive {
+		t.Fatalf("unexpected event: %+v", events[0])
+	}
+
+	var payload HookGroupInfo
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.AppName != "live" || payload.StreamName != "stream-active" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestBuiltinHTTPPluginRespectsEnableFlag(t *testing.T) {
+	var requestCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	hub := NewHttpNotify(config.HttpNotifyConfig{
+		Enable:     false,
+		OnPubStart: ts.URL,
+	}, "hub-test")
+
+	hub.NotifyPubStart(base.PubStartInfo{})
+	time.Sleep(200 * time.Millisecond)
+
+	if got := requestCount.Load(); got != 0 {
+		t.Fatalf("unexpected webhook request count: %d", got)
+	}
+}
+
+func TestHookRecentEndpoint(t *testing.T) {
+	svr, err := NewLalMaxServer(&config.Config{
+		LalRawContent: []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
+		HttpConfig: config.HttpConfig{
+			ListenAddr: ":52350",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svr.notifyHub.NotifyPubStop(base.PubStopInfo{})
+
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/hook/recent?limit=1", nil)
+	svr.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out struct {
+		base.ApiRespBasic
+		Data struct {
+			Events []HookEvent `json:"events"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+	if len(out.Data.Events) != 1 {
+		t.Fatalf("unexpected event count: %d", len(out.Data.Events))
+	}
+	if out.Data.Events[0].Event != HookEventPubStop {
+		t.Fatalf("unexpected event: %+v", out.Data.Events[0])
+	}
+}
+
+func TestHookRecentEndpointFilterByEventAndStream(t *testing.T) {
+	svr, err := NewLalMaxServer(&config.Config{
+		LalRawContent: []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
+		HttpConfig: config.HttpConfig{
+			ListenAddr: ":52351",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svr.notifyHub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "pub-1",
+			StreamName: "stream-a",
+			AppName:    "live",
+		},
+	})
+	svr.notifyHub.NotifyPubStop(base.PubStopInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "pub-2",
+			StreamName: "stream-b",
+			AppName:    "live",
+		},
+	})
+
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/hook/recent?limit=10&stream_name=stream-a&event=on_pub_start", nil)
+	svr.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out struct {
+		base.ApiRespBasic
+		Data struct {
+			Events []HookEvent `json:"events"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Data.Events) != 1 {
+		t.Fatalf("unexpected event count: %d", len(out.Data.Events))
+	}
+	if out.Data.Events[0].Event != HookEventPubStart {
+		t.Fatalf("unexpected event: %+v", out.Data.Events[0])
+	}
+}
+
+func TestHookEventFilterBySessionID(t *testing.T) {
+	filter := NewHookEventFilter("", "", "sess-2", nil)
+
+	pubStart := HookEvent{Event: HookEventPubStart, sessionID: "sess-1"}
+	pubStop := HookEvent{Event: HookEventPubStop, sessionID: "sess-2"}
+
+	if filter.Match(pubStart) {
+		t.Fatalf("session filter unexpectedly matched: %+v", pubStart)
+	}
+	if !filter.Match(pubStop) {
+		t.Fatalf("session filter did not match: %+v", pubStop)
+	}
+}
+
+func TestHookEventFilterByUpdateGroup(t *testing.T) {
+	filter := NewHookEventFilter("live", "stream-a", "", []string{HookEventUpdate})
+	event := HookEvent{
+		Event: HookEventUpdate,
+		groupKeys: []maxlogic.StreamKey{
+			maxlogic.NewStreamKey("live", "stream-a"),
+			maxlogic.NewStreamKey("live", "stream-b"),
+		},
+	}
+
+	if !filter.Match(event) {
+		t.Fatalf("update filter did not match: %+v", event)
+	}
+}
+
+func TestHookEventFilterByGroupLifecycle(t *testing.T) {
+	filter := NewHookEventFilter("live", "stream-a", "", []string{HookEventGroupStart})
+	event := HookEvent{
+		Event:      HookEventGroupStart,
+		appName:    "live",
+		streamName: "stream-a",
+	}
+
+	if !filter.Match(event) {
+		t.Fatalf("group lifecycle filter did not match: %+v", event)
+	}
+}
+
+func TestHookPluginReceivesFilteredEvents(t *testing.T) {
+	hub := NewHttpNotify(config.HttpNotifyConfig{}, "plugin-test")
+	plugin := &testHookPlugin{
+		name:   "stream-a-plugin",
+		events: make(chan HookEvent, 2),
+	}
+
+	cancel, err := hub.RegisterPlugin(plugin, HookPluginOptions{
+		Filter: NewHookEventFilter("live", "stream-a", "", []string{HookEventPubStart}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+
+	hub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "pub-a",
+			StreamName: "stream-a",
+			AppName:    "live",
+		},
+	})
+	hub.NotifyPubStop(base.PubStopInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "pub-a",
+			StreamName: "stream-a",
+			AppName:    "live",
+		},
+	})
+
+	select {
+	case event := <-plugin.events:
+		if event.Event != HookEventPubStart {
+			t.Fatalf("unexpected plugin event: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait plugin event timeout")
+	}
+
+	select {
+	case event := <-plugin.events:
+		t.Fatalf("unexpected extra plugin event: %+v", event)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestRegisterHookPluginFromServer(t *testing.T) {
+	svr, err := NewLalMaxServer(&config.Config{
+		LalRawContent: []byte(`{"rtmp":{"enable":false},"rtsp":{"enable":false},"http_api":{"enable":false},"pprof":{"enable":false}}`),
+		HttpConfig: config.HttpConfig{
+			ListenAddr: ":52352",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plugin := &testHookPlugin{
+		name:   "server-plugin",
+		events: make(chan HookEvent, 1),
+	}
+	cancel, err := svr.RegisterHookPlugin(plugin, HookPluginOptions{
+		Filter: NewHookEventFilter("", "", "", []string{HookEventPubStop}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+
+	svr.notifyHub.NotifyPubStop(base.PubStopInfo{})
+
+	select {
+	case event := <-plugin.events:
+		if event.Event != HookEventPubStop {
+			t.Fatalf("unexpected event: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait server plugin event timeout")
 	}
 }
 

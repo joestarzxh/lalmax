@@ -11,6 +11,7 @@ import (
 func (s *LalMaxServer) initCtrlRouter(router *gin.Engine, handlers ...gin.HandlerFunc) {
 	ctrl := router.Group("/api/ctrl", handlers...)
 	ctrl.POST("/start_relay_pull", s.ctrlStartRelayPullHandler)
+	ctrl.GET("/stop_relay_pull", s.ctrlStopRelayPullHandler)
 	ctrl.POST("/stop_relay_pull", s.ctrlStopRelayPullHandler)
 	ctrl.POST("/kick_session", s.ctrlKickSessionHandler)
 	ctrl.POST("/start_rtp_pub", s.ctrlStartRtpPubHandler)

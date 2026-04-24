@@ -4,7 +4,18 @@ lalmax 提供了一些 HTTP 的 API 接口，通过这些接口，可以获取 l
 
  lalmax 的 HTTP API 旨在包含 lal 的 API 调用，并补充相关订阅数据。其请求方式，请求参数，响应参数等与 lal API 完全一致。
 
-可参考本文档，也可以参考 lal API 文档。
+建议优先阅读以下文档：
+
+- [api_gateway.md](./api_gateway.md)
+- [hook_api.md](./hook_api.md)
+- [hook_plugin_architecture.md](./hook_plugin_architecture.md)
+- [lal_api.md](./lal_api.md)
+
+说明：
+
+- `lalmax` 默认统一入口是 `lalmax.http_config.http_listen_addr`，默认示例通常是 `:1290`
+- `lal.http_api` 是 `lal` 原生调试入口，默认建议关闭
+- 本文档保留兼容接口说明，但 hook API 与网关设计请以上述文档为准
 
 ## 接口列表
 
@@ -22,6 +33,10 @@ lalmax 提供了一些 HTTP 的 API 接口，通过这些接口，可以获取 l
 2.2. /api/ctrl/stop_relay_pull  // 停止relay pull
 2.3. /api/ctrl/kick_session     // 强行踢出关闭指定session，session可以是pub、sub、pull类型
 2.4. /api/ctrl/start_rtp_pub    // 打开GB28181接收端口(停止先使用kick_session)
+2.5. /api/ctrl/stop_rtp_pub     // 关闭GB28181/RTP接收会话
+
+3.1. /api/hook/recent           // 查询最近 hook 事件
+3.2. /api/hook/stream           // 持续订阅 hook 事件
 ```
 
 ## 名词解释

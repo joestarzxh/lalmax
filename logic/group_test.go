@@ -606,6 +606,32 @@ func TestOnStopIsIdempotentAndClosesSubscribers(t *testing.T) {
 	}
 }
 
+func TestOnMsgTriggersActiveHookOnceOnFirstMediaPacket(t *testing.T) {
+	group := newTestGroup("test-active-hook")
+	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-active-hook")
+
+	key := StreamKeyFromStreamName("test-active-hook")
+	var got []StreamKey
+	group.BindActiveHook(key, func(k StreamKey) {
+		got = append(got, k)
+	})
+
+	group.OnMsg(videoSeqHeader(1))
+	group.OnMsg(aacSeqHeader(2))
+	if len(got) != 0 {
+		t.Fatalf("active hook count after seq header = %d, want 0", len(got))
+	}
+	group.OnMsg(videoKeyNalu(3))
+	group.OnMsg(aacRaw(4))
+
+	if len(got) != 1 {
+		t.Fatalf("active hook count = %d, want 1", len(got))
+	}
+	if got[0] != key {
+		t.Fatalf("active hook key = %+v, want %+v", got[0], key)
+	}
+}
+
 func TestAddSubscriberAfterStopIsIgnored(t *testing.T) {
 	group := newTestGroup("test-add-after-stop")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-add-after-stop")

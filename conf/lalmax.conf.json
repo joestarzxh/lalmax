@@ -42,6 +42,9 @@
       "enable": false,
       "update_interval_sec": 5,
       "on_update": "http://127.0.0.1:10101/on_update",
+      "on_group_start": "http://127.0.0.1:10101/on_group_start",
+      "on_group_stop": "http://127.0.0.1:10101/on_group_stop",
+      "on_stream_active": "http://127.0.0.1:10101/on_stream_active",
       "on_pub_start": "http://127.0.0.1:10101/on_pub_start",
       "on_pub_stop": "http://127.0.0.1:10101/on_pub_stop",
       "on_sub_start": "http://127.0.0.1:10101/on_sub_start",
@@ -132,7 +135,7 @@
       "addr": ""
     },
     "http_api": {
-      "enable": true,
+      "enable": false,
       "addr": ":8083"
     },
     "server_id": "1",
