@@ -11,6 +11,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -29,17 +30,24 @@ import (
 // TODO(chef): refactor 配置参数供外部传入
 // TODO(chef): refactor maxTaskLen修改为能表示是阻塞任务的意思
 var (
-	maxTaskLen       = 1024
-	notifyTimeoutSec = 3
-	hookHistorySize  = 256
-	hookSubBufSize   = 64
+	maxTaskLen                  = 1024
+	notifyTimeoutSec            = 3
+	hookHistorySize             = 256
+	hookSubBufSize              = 64
+	hookHTTPPostWorkerIdleAfter = time.Minute
 )
 
 var Log = nazalog.GetGlobalLogger()
 
-type PostTask struct {
-	url  string
-	info interface{}
+type hookHTTPPostTask struct {
+	url       string
+	orderKey  string
+	eventName string
+	payload   []byte
+}
+
+type hookHTTPPostWorker struct {
+	queue chan hookHTTPPostTask
 }
 
 type HookGroupInfo struct {
@@ -82,9 +90,7 @@ type HttpNotify struct {
 	serverId string
 	stats    *maxlogic.StatAggregator
 
-	taskQueue         chan PostTask
-	notifyUpdateQueue chan PostTask
-	client            *http.Client
+	client *http.Client
 
 	eventID     atomic.Int64
 	subID       atomic.Int64
@@ -94,25 +100,24 @@ type HttpNotify struct {
 	subscribers map[int64]chan HookEvent
 	pluginMux   sync.RWMutex
 	plugins     map[string]*hookPluginEntry
+	httpPostMux sync.Mutex
+	httpPosts   map[string]*hookHTTPPostWorker
 }
 
 func NewHttpNotify(cfg config.HttpNotifyConfig, serverId string) *HttpNotify {
 	httpNotify := &HttpNotify{
-		cfg:               cfg,
-		serverId:          serverId,
-		stats:             maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
-		taskQueue:         make(chan PostTask, maxTaskLen),
-		notifyUpdateQueue: make(chan PostTask, maxTaskLen),
-		history:           make([]HookEvent, 0, hookHistorySize),
-		subscribers:       make(map[int64]chan HookEvent),
-		plugins:           make(map[string]*hookPluginEntry),
+		cfg:         cfg,
+		serverId:    serverId,
+		stats:       maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
+		history:     make([]HookEvent, 0, hookHistorySize),
+		subscribers: make(map[int64]chan HookEvent),
+		plugins:     make(map[string]*hookPluginEntry),
+		httpPosts:   make(map[string]*hookHTTPPostWorker),
 		client: &http.Client{
 			Timeout: time.Duration(notifyTimeoutSec) * time.Second,
 		},
 	}
 	httpNotify.mustRegisterBuiltinHTTPPlugin()
-	go httpNotify.RunLoop()
-	go httpNotify.NotifyUpdateRunLoop()
 
 	return httpNotify
 }
@@ -241,72 +246,88 @@ func (h *HttpNotify) OnHlsMakeTs(info base.HlsMakeTsInfo) {
 	h.NotifyOnHlsMakeTs(info)
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-
-func (h *HttpNotify) RunLoop() {
-	for {
-		select {
-		case t := <-h.taskQueue:
-			h.post(t.url, t.info)
-		}
-	}
-}
-
-func (h *HttpNotify) NotifyUpdateRunLoop() {
-	for {
-		select {
-		case t := <-h.notifyUpdateQueue:
-			h.post(t.url, t.info)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-
-func (h *HttpNotify) notifyUpdateAsyncPost(url string, info interface{}) {
+func (h *HttpNotify) asyncPostEvent(url string, event HookEvent) {
 	if !h.cfg.Enable || url == "" {
 		return
 	}
 
-	select {
-	case h.notifyUpdateQueue <- PostTask{url: url, info: info}:
-		// noop
-	default:
-		Log.Error("http notify queue full.")
+	h.dispatchHTTPPost(h.newHookHTTPPostTask(url, event))
+}
+
+func (h *HttpNotify) newHookHTTPPostTask(url string, event HookEvent) hookHTTPPostTask {
+	return hookHTTPPostTask{
+		url:       url,
+		orderKey:  buildHookHTTPOrderKey(url, event),
+		eventName: event.Event,
+		payload:   append([]byte(nil), event.Payload...),
 	}
 }
 
-func (h *HttpNotify) asyncPost(url string, info interface{}) {
-	if !h.cfg.Enable || url == "" {
-		return
+func buildHookHTTPOrderKey(url string, event HookEvent) string {
+	if event.Event == HookEventUpdate {
+		return url + "|__update__"
+	}
+	if len(event.groupKeys) == 1 {
+		key := event.groupKeys[0]
+		if key.AppName != "" && key.StreamName != "" {
+			return fmt.Sprintf("__stream__|%s|%s", key.AppName, key.StreamName)
+		}
+	}
+	if event.appName != "" && event.streamName != "" {
+		return fmt.Sprintf("__stream__|%s|%s", event.appName, event.streamName)
+	}
+	return url + "|__global__"
+}
+
+func (h *HttpNotify) dispatchHTTPPost(task hookHTTPPostTask) {
+	h.httpPostMux.Lock()
+	worker, ok := h.httpPosts[task.orderKey]
+	if !ok {
+		worker = &hookHTTPPostWorker{
+			queue: make(chan hookHTTPPostTask, maxTaskLen),
+		}
+		h.httpPosts[task.orderKey] = worker
+		go h.runHTTPPostWorker(task.orderKey, worker)
 	}
 
 	select {
-	case h.taskQueue <- PostTask{url: url, info: info}:
-		// noop
+	case worker.queue <- task:
 	default:
-		Log.Error("http notify queue full.")
+		Log.Warnf("http notify queue full. key=%s, event=%s, url=%s", task.orderKey, task.eventName, task.url)
 	}
+	h.httpPostMux.Unlock()
 }
 
-func (h *HttpNotify) post(url string, info interface{}) {
-	switch v := info.(type) {
-	case json.RawMessage:
-		h.postRaw(url, v)
-		return
-	case []byte:
-		h.postRaw(url, v)
-		return
-	}
+func (h *HttpNotify) runHTTPPostWorker(orderKey string, worker *hookHTTPPostWorker) {
+	timer := time.NewTimer(hookHTTPPostWorkerIdleAfter)
+	defer timer.Stop()
 
-	resp, err := nazahttp.PostJson(url, info, h.client)
-	if err != nil {
-		Log.Errorf("http notify post error. err=%+v, url=%s, info=%+v", err, url, info)
-		return
-	}
-	if resp != nil && resp.Body != nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
+	for {
+		select {
+		case task, ok := <-worker.queue:
+			if !ok {
+				return
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			h.postRaw(task.url, task.payload)
+			timer.Reset(hookHTTPPostWorkerIdleAfter)
+		case <-timer.C:
+			h.httpPostMux.Lock()
+			current, exists := h.httpPosts[orderKey]
+			if exists && current == worker && len(worker.queue) == 0 {
+				delete(h.httpPosts, orderKey)
+				close(worker.queue)
+				h.httpPostMux.Unlock()
+				return
+			}
+			h.httpPostMux.Unlock()
+			timer.Reset(hookHTTPPostWorkerIdleAfter)
+		}
 	}
 }
 
