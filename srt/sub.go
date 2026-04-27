@@ -156,3 +156,21 @@ func (s *Subscriber) OnStop() {
 	nazalog.Info("srt subscriber onStop")
 	s.conn.Close()
 }
+
+func (s *Subscriber) GetSubscriberStat() maxlogic.SubscriberStat {
+	if s == nil || s.conn == nil {
+		return maxlogic.SubscriberStat{}
+	}
+
+	var stats srt.Statistics
+	s.conn.Stats(&stats)
+
+	stat := maxlogic.SubscriberStat{
+		ReadBytesSum:  stats.Accumulated.ByteRecv,
+		WroteBytesSum: stats.Accumulated.ByteSent,
+	}
+	if remoteAddr := s.conn.RemoteAddr(); remoteAddr != nil {
+		stat.RemoteAddr = remoteAddr.String()
+	}
+	return stat
+}

@@ -24,6 +24,18 @@ type testHookPlugin struct {
 	events chan HookEvent
 }
 
+type maxlogicTestSubscriber struct {
+	stat maxlogic.SubscriberStat
+}
+
+func (s *maxlogicTestSubscriber) OnMsg(msg base.RtmpMsg) {}
+
+func (s *maxlogicTestSubscriber) OnStop() {}
+
+func (s *maxlogicTestSubscriber) GetSubscriberStat() maxlogic.SubscriberStat {
+	return s.stat
+}
+
 func (p *testHookPlugin) Name() string {
 	return p.name
 }
@@ -258,6 +270,58 @@ func TestStatGroupIncludesLalmaxExtSubs(t *testing.T) {
 	}
 	if out.Data.Lalmax.ExtSubs[0].SessionId != "consumer-stat-group" {
 		t.Fatalf("unexpected ext sub: %+v", out.Data.Lalmax.ExtSubs[0])
+	}
+}
+
+func TestStatGroupIncludesLalmaxExtSubsRuntimeFields(t *testing.T) {
+	streamName := "test_stat_group_runtime"
+
+	_, err := max.lalsvr.AddCustomizePubSession(streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
+	sub := &maxlogicTestSubscriber{
+		stat: maxlogic.SubscriberStat{
+			RemoteAddr:    "10.0.0.1:9000",
+			ReadBytesSum:  1024,
+			WroteBytesSum: 2048,
+		},
+	}
+	ss.AddSubscriber(maxlogic.SubscriberInfo{
+		SubscriberID: "consumer-runtime",
+		Protocol:     maxlogic.SubscriberProtocolSRT,
+	}, sub)
+
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/stat/group?stream_name="+streamName, nil)
+	max.router.ServeHTTP(r, req)
+	resp := r.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+
+	var out ApiStatGroupResp
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+	if out.Data == nil {
+		t.Fatal("group data is nil")
+	}
+	if len(out.Data.Lalmax.ExtSubs) != 1 {
+		t.Fatalf("unexpected lalmax ext_subs len: %d", len(out.Data.Lalmax.ExtSubs))
+	}
+
+	stat := out.Data.Lalmax.ExtSubs[0]
+	if stat.RemoteAddr != "10.0.0.1:9000" {
+		t.Fatalf("remote addr = %s, want 10.0.0.1:9000", stat.RemoteAddr)
+	}
+	if stat.ReadBytesSum != 1024 || stat.WroteBytesSum != 2048 {
+		t.Fatalf("unexpected bytes stat: %+v", stat)
 	}
 }
 

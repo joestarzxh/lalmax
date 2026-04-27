@@ -63,10 +63,16 @@ type Group struct {
 type subscriberState struct {
 	key          StreamKey
 	subscriber   Subscriber
+	statProvider SubscriberStatProvider
 	hasSendVideo bool
 	replayCache  bool
 	writeMux     sync.Mutex
+	statMux      sync.Mutex
 	stopped      atomic.Bool
+	lastStatAt   time.Time
+
+	prevReadBytesSum  uint64
+	prevWroteBytesSum uint64
 
 	base.StatSession
 }
@@ -76,7 +82,10 @@ func (s *subscriberState) AppName() string {
 }
 
 func (s *subscriberState) GetStat() base.StatSession {
-	return s.StatSession
+	if s == nil {
+		return base.StatSession{}
+	}
+	return s.refreshStat(0)
 }
 
 func (s *subscriberState) IsAlive() (readAlive bool, writeAlive bool) {
@@ -96,6 +105,10 @@ func (s *subscriberState) UniqueKey() string {
 }
 
 func (s *subscriberState) UpdateStat(intervalSec uint32) {
+	if s == nil {
+		return
+	}
+	s.refreshStat(float64(intervalSec))
 }
 
 func (s *subscriberState) Url() string {
@@ -284,9 +297,11 @@ func (group *Group) AddSubscriberWithReplay(info SubscriberInfo, subscriber Subs
 	defer group.lifecycleMux.RUnlock()
 
 	state := &subscriberState{
-		key:         group.key,
-		subscriber:  subscriber,
-		replayCache: replayCache,
+		key:          group.key,
+		subscriber:   subscriber,
+		replayCache:  replayCache,
+		lastStatAt:   time.Now(),
+		statProvider: nil,
 		StatSession: base.StatSession{
 			SessionId:  info.SubscriberID,
 			Protocol:   info.Protocol,
@@ -294,6 +309,9 @@ func (group *Group) AddSubscriberWithReplay(info SubscriberInfo, subscriber Subs
 			RemoteAddr: info.RemoteAddr,
 			StartTime:  time.Now().Format(time.DateTime),
 		},
+	}
+	if provider, ok := subscriber.(SubscriberStatProvider); ok {
+		state.statProvider = provider
 	}
 
 	nazalog.Infof("AddSubscriber, streamKey:%s, subscriberId:%s, protocol:%s", group.key.String(), info.SubscriberID, info.Protocol)
@@ -449,6 +467,68 @@ func (s *subscriberState) deliverMsg(msg base.RtmpMsg) bool {
 
 	s.subscriber.OnMsg(msg)
 	return !s.stopped.Load() && s.subscriber != nil
+}
+
+func (s *subscriberState) refreshStat(intervalSec float64) base.StatSession {
+	s.statMux.Lock()
+	defer s.statMux.Unlock()
+
+	s.refreshStatSnapshotLocked()
+
+	if intervalSec <= 0 {
+		if s.lastStatAt.IsZero() {
+			s.lastStatAt = time.Now()
+			return s.StatSession
+		}
+		intervalSec = time.Since(s.lastStatAt).Seconds()
+		if intervalSec < 1 {
+			return s.StatSession
+		}
+	}
+
+	s.updateBitrateLocked(intervalSec)
+	s.lastStatAt = time.Now()
+	return s.StatSession
+}
+
+func (s *subscriberState) refreshStatSnapshotLocked() {
+	if s.statProvider == nil {
+		return
+	}
+
+	stat := s.statProvider.GetSubscriberStat()
+	if stat.RemoteAddr != "" {
+		s.StatSession.RemoteAddr = stat.RemoteAddr
+	}
+	s.StatSession.ReadBytesSum = stat.ReadBytesSum
+	s.StatSession.WroteBytesSum = stat.WroteBytesSum
+}
+
+func (s *subscriberState) updateBitrateLocked(intervalSec float64) {
+	if intervalSec <= 0 {
+		return
+	}
+
+	readDiff := diffUint64(s.StatSession.ReadBytesSum, s.prevReadBytesSum)
+	writeDiff := diffUint64(s.StatSession.WroteBytesSum, s.prevWroteBytesSum)
+
+	s.StatSession.ReadBitrateKbits = bitrateFromBytes(readDiff, intervalSec)
+	s.StatSession.WriteBitrateKbits = bitrateFromBytes(writeDiff, intervalSec)
+	s.StatSession.BitrateKbits = s.StatSession.WriteBitrateKbits
+
+	s.prevReadBytesSum = s.StatSession.ReadBytesSum
+	s.prevWroteBytesSum = s.StatSession.WroteBytesSum
+}
+
+func bitrateFromBytes(bytes uint64, intervalSec float64) int {
+	return int(float64(bytes) * 8 / 1024 / intervalSec)
+}
+
+func diffUint64(curr, prev uint64) uint64 {
+	if curr < prev {
+		return curr
+	}
+	return curr - prev
 }
 
 func (s *subscriberState) stopWithNotify() {

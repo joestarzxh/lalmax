@@ -1,283 +1,311 @@
-# srt_config
-主要用于设置srt相关的配置
-- enable: srt服务使能配置,设置为true才可以使用srt功能
-
-*类型*: bool
-
-*值举例*: true
-
-- addr[string]: srt服务监听地址,srt服务监听的是UDP端口
-
-*类型*: string
-
-*值举例*: ":6001"
-
-# rtc_config
-主要用于设置rtc相关的配置,目前rtc只实现了WHIP/WHEP,需要配合http_config一起使用
-- enable: rtc服务使能配置,设置为true才可以使用rtc功能
-
-*类型*: bool
-
-*值举例*: true
-
-- iceHostNatToIps: rtc服务内穿ip,具体为SDP中的candidate信息,不设置的话,会输出全部网卡的地址
-
-*类型*: []string
-
-*举例*: ["192.168.0.1"]
-
-- iceUdpMuxPort: rtc udp复用端口
-
-*类型*: int
-
-*值举例*: 4888
-
-- iceTcpMuxPort: rtc tcp复用端口
-
-*类型*: int
-
-*值举例*: 4888
-
-# http_config
-主要用于设置http相关的配置,依赖http的协议均需要设置,涉及的协议有rtc、http-fmp4、hls(fmp4/llhls)
-- http_listen_addr: http服务监听地址
-
-*类型*: string
-
-*值举例*: ":1290"
-
-- enable_https: https使能
-
-*类型*: bool
-
-*值举例*: true
-
-- https_listen_addr: https监听地址
-
-*类型*: string
-
-*值举例*: ":1233"
-
-- https_cert_file: https cert文件路径
-
-*类型*: string
-
-*值举例*: "./conf/cert.pem"
-
-- https_key_file: https key文件路径
-
-*类型*: string
-
-*值举例*: "./conf/key.pem"
-
-- ctrl_auth_whitelist: 统计控制类接口鉴权，用于访问以 `/api/stat` 和 `/api/ctrl` 前缀的接口，无权限访问时 http status 将会响应 200，其 error_code 为 401。多种鉴权方式都不是零值时，必须同时满足才会通过鉴权。
-
-*类型*: object
-
-- secrets: 用户请求鉴权的方式是增加 query 参数 `token`，例如 `token=secret`，满足数组中任意匹配则通过。
-
-*类型*: []string
-
-*值举例*: ["EC3D1536-5D93-4BD6-9FBD-96A52CB1596D"]
-
-- ips: 远程 IP 白名单，空数组表示允许任意 IP 访问，无权限访问时 http status 将会响应 200，其 error_code 为 401。
-
-*类型*: []string
-
-*值举例*: ["192.168.1.2","192.168.1.3"]
-
-
-# fmp4_config
-主要用于设置 lalmax fMP4 相关能力，需要配合 `http_config` 一起使用。
-
-## http
-主要用于设置 HTTP-FMP4 相关的配置。
-
-- enable: HTTP-FMP4 服务使能配置
-
-*类型*: bool
-
-*值举例*: true
-
-## hls
-主要用于设置 HLS-FMP4/LLHLS 相关的配置。HLS-TS 能力请使用 lal 的 `hls` 配置。
-
-- enable: HLS-FMP4/LLHLS 服务使能配置
-
-*类型*: bool
-
-*值举例*: true
-
-- segment_count: HLS-FMP4 m3u8 返回的切片个数，默认为 7。LLHLS 默认设置为 7 个。
-
-*类型*: int
-
-*值举例*: 3
-
-- segment_duration: HLS-FMP4 切片时长，默认为 1s
-
-*类型*: int
-
-*值举例*: 3
-
-- part_duration: LLHLS part 部分的时长，默认为 200ms
-
-*类型*: int
-
-*值举例*: 100
-
-- low_latency: LLHLS 使能配置，开启此配置后使用低延迟 HLS
-
-*类型*: bool
-
-*值举例*: true
-
-# logic_config
-主要用于 lalmax 扩展流组相关的配置。
-
-- gop_cache_num: gop 缓存的数量，默认为 1
-
-*类型*: int
-
-*值举例*: 3
-
-- single_gop_max_frame_num: 一个 gop 的缓存帧数，0 表示智能识别
-
-*类型*: int
-
-*值举例*: 120
-
-# http_notify
-主要用于设置 hook 事件对外转发配置。当前既支持 `lal` 原生 notify 事件，也支持 `lalmax` 自己基于聚合状态派生的事件。
-
-- enable: 是否启用内置 HTTP notify 插件
-
-*类型*: bool
-
-*值举例*: true
-
-- update_interval_sec: `on_update` 的周期秒数。`lalmax` 会按这个周期采集当前 group 快照并发出 `on_update`
-
-*类型*: int
-
-*值举例*: 5
+# lalmax 配置说明
+
+本文档说明 `conf/lalmax.conf.json` 里 `lalmax` 这一段的配置。  
+`lal` 原生配置请看 [lal_config.md](./lal_config.md)。
+
+## 推荐配置结构
+
+当前程序推荐使用一个统一的配置文件，并按顶层标签拆开：
+
+```json
+{
+  "lalmax": {
+    "server_id": "1",
+    "srt_config": {},
+    "rtc_config": {},
+    "http_config": {},
+    "fmp4_config": {},
+    "logic_config": {},
+    "http_notify": {},
+    "gb28181_config": {}
+  },
+  "lal": {}
+}
+```
 
 说明：
 
-- 该值控制周期性 `on_update`
-- 启动阶段上游 `lal` 仍可能先产生一次初始快照 `on_update`
+- `lalmax`：`lalmax` 自己的扩展能力配置
+- `lal`：内嵌 `lal` 的原生配置
 
-- on_update: 接收聚合后全量 group 快照的回调地址
+如果同时提供了顶层 `lal` 标签，程序会优先使用这段内容作为 `lal` 的原生配置，不再读取 `lal_config_path` 指向的文件。
 
-*类型*: string
+## srt_config
 
-*值举例*: "http://127.0.0.1:10101/on_update"
+SRT 服务配置。
 
-- on_group_start: 接收 group/流开始进入 `lalmax` 统一输入流生命周期时的回调地址
+- `enable`：是否启用 SRT
+- `addr`：SRT 监听地址，示例 `:6001`
 
-*类型*: string
+示例：
 
-*值举例*: "http://127.0.0.1:10101/on_group_start"
+```json
+{
+  "enable": true,
+  "addr": ":6001"
+}
+```
 
-- on_group_stop: 接收 group/流从 `lalmax` 统一输入流生命周期中结束时的回调地址
+## rtc_config
 
-*类型*: string
+RTC 服务配置。目前主要用于 WHIP、WHEP 和 Jessibuca 播放链路。
 
-*值举例*: "http://127.0.0.1:10101/on_group_stop"
+- `enable`：是否启用 RTC
+- `ice_host_nat_to_ips`：对外暴露的 ICE 地址列表；为空时使用本机可用地址
+- `ice_udp_mux_port`：ICE UDP 复用端口
+- `ice_tcp_mux_port`：ICE TCP 复用端口
+- `write_chan_size`：RTC 订阅侧写队列大小；如果填 `0`，程序会自动使用 `1024`
 
-- on_stream_active: 接收 group/流收到首个音频或视频消息时的回调地址，只触发一次
+示例：
 
-*类型*: string
+```json
+{
+  "enable": true,
+  "ice_host_nat_to_ips": ["192.168.0.1"],
+  "ice_udp_mux_port": 4888,
+  "ice_tcp_mux_port": 4888,
+  "write_chan_size": 1024
+}
+```
 
-*值举例*: "http://127.0.0.1:10101/on_stream_active"
+## http_config
 
-- on_pub_start / on_pub_stop / on_sub_start / on_sub_stop / on_relay_pull_start / on_relay_pull_stop / on_rtmp_connect / on_server_start / on_hls_make_ts
+`lalmax` 自己的 HTTP/HTTPS 配置。管理接口、RTC 信令、HTTP-FMP4、HLS-FMP4/LLHLS 都依赖这里。
 
-*类型*: string
+- `http_listen_addr`：HTTP 监听地址，示例 `:1290`
+- `enable_https`：是否启用 HTTPS
+- `https_listen_addr`：HTTPS 监听地址
+- `https_cert_file`：HTTPS 证书文件
+- `https_key_file`：HTTPS 私钥文件
+- `ctrl_auth_whitelist`：管理接口鉴权配置
 
-说明：各自对应原有 hook 事件回调地址。
+`ctrl_auth_whitelist` 的字段如下：
+
+- `secrets`：允许的令牌列表，请求时通过查询参数 `token` 传入
+- `ips`：允许访问的客户端 IP 列表
+
+当前鉴权覆盖范围：
+
+- `/api/stat/*`
+- `/api/ctrl/*`
+- `/api/hook/*`
+
+规则说明：
+
+- 如果 `secrets` 和 `ips` 都为空，表示不做鉴权
+- 如果两者都配置了，请求必须同时满足两项
+- 鉴权失败时，HTTP 状态码仍然是 `200`，返回体里的 `error_code` 是 `401`
+
+示例：
+
+```json
+{
+  "http_listen_addr": ":1290",
+  "enable_https": true,
+  "https_listen_addr": ":1233",
+  "https_cert_file": "./conf/cert.pem",
+  "https_key_file": "./conf/key.pem",
+  "ctrl_auth_whitelist": {
+    "ips": ["192.168.1.10"],
+    "secrets": ["EC3D1536-5D93-4BD6-9FBD-96A52CB1596D"]
+  }
+}
+```
+
+## fmp4_config
+
+`lalmax` 的 FMP4 相关配置，分成 `http` 和 `hls` 两段。
+
+### fmp4_config.http
+
+HTTP-FMP4 配置。
+
+- `enable`：是否启用 HTTP-FMP4
+
+### fmp4_config.hls
+
+HLS-FMP4 / LLHLS 配置。
+
+- `enable`：是否启用 HLS-FMP4 / LLHLS
+- `segment_count`：m3u8 保留的切片数量
+- `segment_duration`：切片时长，单位秒
+- `part_duration`：LLHLS part 时长，单位毫秒
+- `low_latency`：是否启用低延迟 HLS
+
+示例：
+
+```json
+{
+  "http": {
+    "enable": true
+  },
+  "hls": {
+    "enable": true,
+    "segment_count": 7,
+    "segment_duration": 1,
+    "part_duration": 200,
+    "low_latency": false
+  }
+}
+```
+
+## logic_config
+
+`lalmax` 扩展流分组配置。
+
+- `gop_cache_num`：GOP 缓存数量
+- `single_gop_max_frame_num`：单个 GOP 最多缓存多少帧；`0` 表示自动判断
+
+示例：
+
+```json
+{
+  "gop_cache_num": 1,
+  "single_gop_max_frame_num": 0
+}
+```
+
+## server_id
+
+服务实例标识。
+
+这个值会出现在：
+
+- Hook 事件的 `server_id`
+- HTTP 回调的 payload
+
+示例：
+
+```json
+"server_id": "1"
+```
+
+## http_notify
+
+内置 HTTP 回调插件配置。
+
+先说明两件事：
+
+- 这段配置控制的是“是否向外发 HTTP 回调”
+- 不影响内部 HookHub、本地插件注册、`/api/hook/*` 查询和订阅能力
+
+字段如下：
+
+- `enable`：是否启用内置 HTTP 回调插件
+- `update_interval_sec`：周期性生成 `on_update` 事件的间隔秒数
+- `on_server_start`
+- `on_update`
+- `on_group_start`
+- `on_group_stop`
+- `on_stream_active`
+- `on_pub_start`
+- `on_pub_stop`
+- `on_sub_start`
+- `on_sub_stop`
+- `on_relay_pull_start`
+- `on_relay_pull_stop`
+- `on_rtmp_connect`
+- `on_hls_make_ts`
+
+关于 `update_interval_sec`，当前程序的行为是：
+
+- 大于 `0` 时，`lalmax` 会按这个周期向 HookHub 发布 `on_update`
+- 即使 `enable=false`，这些事件依然会进入 HookHub，也能被 `/api/hook/*` 和进程内插件看到
+- 只有在 `enable=true` 且对应回调地址非空时，内置插件才会真正向外发 HTTP 请求
+
+示例：
+
+```json
+{
+  "enable": true,
+  "update_interval_sec": 5,
+  "on_update": "http://127.0.0.1:10101/on_update",
+  "on_group_start": "http://127.0.0.1:10101/on_group_start",
+  "on_group_stop": "http://127.0.0.1:10101/on_group_stop",
+  "on_stream_active": "http://127.0.0.1:10101/on_stream_active",
+  "on_pub_start": "http://127.0.0.1:10101/on_pub_start",
+  "on_pub_stop": "http://127.0.0.1:10101/on_pub_stop",
+  "on_sub_start": "http://127.0.0.1:10101/on_sub_start",
+  "on_sub_stop": "http://127.0.0.1:10101/on_sub_stop",
+  "on_relay_pull_start": "http://127.0.0.1:10101/on_relay_pull_start",
+  "on_relay_pull_stop": "http://127.0.0.1:10101/on_relay_pull_stop",
+  "on_rtmp_connect": "http://127.0.0.1:10101/on_rtmp_connect",
+  "on_server_start": "http://127.0.0.1:10101/on_server_start",
+  "on_hls_make_ts": "http://127.0.0.1:10101/on_hls_make_ts"
+}
+```
 
 建议：
 
 - 对外统一只配置 `lalmax.http_notify`
-- `lal` 配置段中的原生 `http_notify` 建议保持关闭；如果两边同时配置，尤其都启用了 `update_interval_sec`，可能出现重复 webhook
+- `lal` 配置段里的原生 `http_notify` 建议保持关闭
+- 如果两边同时往外发，尤其都带 `on_update`，很容易出现重复回调
 
+Hook 事件的具体语义请看 [hook_api.md](./hook_api.md)。
 
-# gb28181_config
+## gb28181_config
 
-- enable: gb28181使能配置
+GB28181 服务配置。
 
-*类型*: bool
+字段如下：
 
-*值举例*: true
+- `enable`：是否启用 GB28181
+- `listen_addr`：SIP 服务监听 IP，默认会补成 `0.0.0.0`
+- `sip_ip`：SIP 对外地址，生成设备交互内容时会用到
+- `sip_port`：SIP 端口，默认 `5060`
+- `serial`：平台 ID，默认 `34020000002000000001`
+- `realm`：平台域，默认 `3402000000`
+- `username`：认证用户名
+- `password`：认证密码
+- `keepalive_interval`：设备心跳周期，默认 `60`
+- `quick_login`：是否允许设备通过 Keepalive 快速建档
+- `media_config`：媒体端口配置
 
-- listenAddr: gb28181监听地址
+`media_config` 字段如下：
 
-*类型*: string
+- `media_ip`：在 SDP 中对外声明的媒体 IP；默认 `0.0.0.0`
+- `listen_port`：固定媒体端口起点；默认 `30000`
+- `multi_port_max_increment`：多端口模式下可分配的附加端口范围；默认 `3000`
 
-*值举例*: "0.0.0.0"
+示例：
 
-- sipNetwork: 传输协议
+```json
+{
+  "enable": true,
+  "listen_addr": "0.0.0.0",
+  "sip_ip": "100.100.100.101",
+  "sip_port": 5060,
+  "serial": "34020000002000000001",
+  "realm": "3402000000",
+  "username": "admin",
+  "password": "admin123",
+  "keepalive_interval": 60,
+  "quick_login": false,
+  "media_config": {
+    "media_ip": "100.100.100.101",
+    "listen_port": 30000,
+    "multi_port_max_increment": 3000
+  }
+}
+```
 
-*类型*: string
+## 兼容说明
 
-*值举例*: "udp"
+当前程序还兼容一部分旧配置写法：
 
-- sipIp: sip服务器公网IP
+- 旧版平铺配置仍然可以读
+- `lal_config_path` 仍然保留兼容
+- 如果没有 `logic_config`，会尝试兼容旧字段 `hook_config`
+- 如果没有 `fmp4_config`，会尝试兼容旧字段 `httpfmp4_config` 和 `hls_config`
 
-*类型*: string
+但新项目建议统一使用当前这套结构，也就是：
 
-*值举例*: "100.100.100.101"
+- 顶层使用 `lalmax` 和 `lal`
+- `lalmax` 内部使用当前代码里的 snake_case 字段名
 
-- sipPort: sip服务器公网端口
+## 相关文档
 
-*类型*: uint16
-
-*值举例*: 5060
-
-- serial: sip服务器ID
-
-*类型*: string
-
-*值举例*: "34020000002000000001"
-
-- realm: sip服务器域
-
-*类型*: string
-
-*值举例*: "3402000000"
-
-- username: sip服务器账号
-
-*类型*: string
-
-*值举例*: "admin"
-
-- password: sip服务器密码
-
-*类型*: string
-
-*值举例*: "admin123"
-
-# onvif_config
-- enable: onvif使能配置
-
-*类型*: bool
-
-*值举例*: true
-
-# 配置文件结构
-推荐使用单个 `lalmax.conf.json`，并按顶层标签拆分配置：
-
-- `lalmax`: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181、Hook 缓存等。
-- `lal`: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等。
-
-关于 Hook API、Hook 插件化和统一事件分发架构，另见：
-
-- [hook_api.md](./hook_api.md)
-- [hook_plugin_architecture.md](./hook_plugin_architecture.md)
-
-旧版平铺配置和 `lal_config_path` 仍兼容。新配置中如果提供了 `lal` 标签，将优先使用该标签内容作为 lal 原生配置，不再读取 `lal_config_path`。
-
-# lal_config_path
-兼容旧版配置，用于设置 lal 原生配置文件的路径。推荐新配置使用顶层 `lal` 标签代替。
+- [lal_config.md](./lal_config.md)：`lal` 原生配置
+- [api.md](./api.md)：统一管理 API 总览
+- [hook_api.md](./hook_api.md)：Hook 查询与订阅接口
+- [hook_plugin_architecture.md](./hook_plugin_architecture.md)：HookHub 与插件化架构

@@ -1,410 +1,374 @@
-# HTTP API
+# HTTP API 总览
 
-lalmax 提供了一些 HTTP 的 API 接口，通过这些接口，可以获取 lalmax 的一些状态，以及控制一些行为。
+`lalmax` 对外建议统一只暴露一个 HTTP 管理入口，也就是 `lalmax.http_config.http_listen_addr`，示例配置通常是 `:1290`。  
+`lal.http_api` 仍然可以保留给排查 `lal` 原生行为时使用，但默认建议关闭，不要和 `lalmax` 的管理入口混用。
 
- lalmax 的 HTTP API 旨在包含 lal 的 API 调用，并补充相关订阅数据。其请求方式，请求参数，响应参数等与 lal API 完全一致。
+建议配合以下文档一起看：
 
-建议优先阅读以下文档：
+- [api_gateway.md](./api_gateway.md)：统一入口和状态聚合说明
+- [hook_api.md](./hook_api.md)：Hook 查询与订阅接口
+- [hook_plugin_architecture.md](./hook_plugin_architecture.md)：HookHub 与插件化架构
+- [lal_api.md](./lal_api.md)：`lal` 原生 HTTP API 的定位和兼容关系
 
-- [api_gateway.md](./api_gateway.md)
-- [hook_api.md](./hook_api.md)
-- [hook_plugin_architecture.md](./hook_plugin_architecture.md)
-- [lal_api.md](./lal_api.md)
+## 基本约定
 
-说明：
+- 对外统一入口默认是 `http://127.0.0.1:1290`
+- `/api/stat/*`、`/api/ctrl/*`、`/api/hook/*` 共用同一套鉴权配置：`lalmax.http_config.ctrl_auth_whitelist`
+- 如果鉴权失败，HTTP 状态码仍然是 `200`，返回体里的 `error_code` 为 `401`
+- 除 `GET /api/hook/stream` 之外，其余接口都返回 JSON
 
-- `lalmax` 默认统一入口是 `lalmax.http_config.http_listen_addr`，默认示例通常是 `:1290`
-- `lal.http_api` 是 `lal` 原生调试入口，默认建议关闭
-- 本文档保留兼容接口说明，但 hook API 与网关设计请以上述文档为准
-
-## 接口列表
-
-接口分为两大类：
-
-- 查询类型的，以 `/api/stat` 开头
-- 控制类型的，以 `/api/ctrl` 开头
-
-```bash
-1.1. /api/stat/group     // 查询特定group的信息
-1.2. /api/stat/all_group // 查询所有group的信息
-1.3. /api/stat/lal_info  // 查询服务器信息
-
-2.1. /api/ctrl/start_relay_pull // 控制服务器从远端拉流至本地
-2.2. /api/ctrl/stop_relay_pull  // 停止relay pull
-2.3. /api/ctrl/kick_session     // 强行踢出关闭指定session，session可以是pub、sub、pull类型
-2.4. /api/ctrl/start_rtp_pub    // 打开GB28181接收端口(停止先使用kick_session)
-2.5. /api/ctrl/stop_rtp_pub     // 关闭GB28181/RTP接收会话
-
-3.1. /api/hook/recent           // 查询最近 hook 事件
-3.2. /api/hook/stream           // 持续订阅 hook 事件
-```
-
-## 名词解释
-
-+ `group` lal中的group是群组的概念，lal作为流媒体服务器，通过流名称将每1路输入流转发给`1~n`路输出流，流名称相同的输入输出流被同1个group群组管理。
-
-## 接口规则
-
-1 所有接口的返回结果中，必含的一级参数：
+统一返回结构如下：
 
 ```json
 {
-    "error_code": 0,
-    "desp": "succ",
-    "data": ...
+  "error_code": 0,
+  "desp": "succ",
+  "data": {}
 }
 ```
 
-2 `error_code`列表：
+常见 `error_code` 如下：
 
-| error_code | desp                       | 说明                 |
-| ---------- | -------------------------- | -------------------- |
-| 0          | succ                       | 调用成功             |
-| 1001       | group not found            | group不存在          |
-| 1002       | param missing              | 必填参数缺失         |
-| 1003       | session not found          | session不存在        |
-| 2001       | 多种值，表示失败的具体原因 | start_relay_pull失败 |
-| 2002       | 打开gb28181端口失败        | start_rtp_pub失败    |
+| error_code | desp | 说明 |
+| --- | --- | --- |
+| 0 | succ | 调用成功 |
+| 401 | Unauthorized | 鉴权失败 |
+| 1001 | group not found | 流分组不存在，或者仅传 `stream_name` 时无法唯一定位 |
+| 1002 | param missing | 必填参数缺失 |
+| 1003 | session not found | 会话不存在 |
+| 2001 | 具体错误信息见 `desp` | `start_relay_pull` 执行失败 |
+| 2002 | 具体错误信息见 `desp` | `start_rtp_pub` 执行失败 |
 
-3 注意，有的接口使用HTTP GET+URL 参数的形式调用，有的接口使用 HTTP POST+JSON body 的形式调用，请仔细查看文档说明。
+## 当前接口列表
 
-## 接口详情
+### 统计接口
 
-### 1.1 `/api/stat/group`
+- `GET /api/stat/group`
+- `GET /api/stat/all_group`
+- `GET /api/stat/lal_info`
 
-✸ 简要描述： 查询指定group的信息
+### 控制接口
 
-✸ 请求示例：
+- `POST /api/ctrl/start_relay_pull`
+- `GET /api/ctrl/stop_relay_pull`
+- `POST /api/ctrl/stop_relay_pull`
+- `POST /api/ctrl/kick_session`
+- `POST /api/ctrl/start_rtp_pub`
+- `POST /api/ctrl/stop_rtp_pub`
 
+### Hook 接口
+
+- `GET /api/hook/recent`
+- `GET /api/hook/stream`
+
+## 统计接口
+
+### `GET /api/stat/group`
+
+查询单个流分组的当前状态。
+
+请求参数：
+
+- `stream_name`：必填，流名
+- `app_name`：可选，应用名
+
+说明：
+
+- 如果同一个 `stream_name` 只对应一个流分组，可以只传 `stream_name`
+- 如果同一个 `stream_name` 在多个 `app_name` 下都存在，建议同时传 `app_name + stream_name`
+- 当前返回结果会在兼容 `lal` 原生字段的基础上，额外补充 `lalmax.ext_subs`
+
+请求示例：
+
+```bash
+curl "http://127.0.0.1:1290/api/stat/group?stream_name=test110"
+curl "http://127.0.0.1:1290/api/stat/group?app_name=live&stream_name=test110"
 ```
-$curl http://127.0.0.1:8083/api/stat/group?stream_name=test110
-```
 
-✸ 请求方式： `HTTP GET`+url参数
+返回示例：
 
-✸ 请求参数：
-
-- stream_name | 必填项 | 指定 group 的流名称
-
-✸ 返回值`error_code`可能取值：
-
-- 0 group存在，查询成功
-- 1001 group不存在
-- 1002 必填参数缺失
-
-✸ 返回示例：
-
-```
+```json
 {
-  "error_code": 0, // 接口返回值，0表示成功
-  "desp": "succ",  // 接口返回描述，"succ"表示成功
+  "error_code": 0,
+  "desp": "succ",
   "data": {
-    "stream_name": "test110", // 流名称
-    "app_name":    "live",    // appName
-    "audio_codec": "AAC",     // 音频编码格式 "AAC"
-    "video_codec": "H264",    // 视频编码格式 "H264" | "H265"
-    "video_width": 640,       // 视频宽
-    "video_height": 360,      // 视频高
-    "pub": {                                   // -----接收推流的信息-----
-      "session_id": "RTMPPUBSUB1",             // 会话ID，会话全局唯一标识
-      "protocol": "RTMP",                      // 推流协议，取值范围： "RTMP" | "RTSP"
-      "base_type": "PUB",                      // 基础类型，该处固定为"PUB"
-      "start_time": "2020-10-11 19:17:41.586", // 推流开始时间
-      "remote_addr": "127.0.0.1:61353",        // 对端地址
-      "read_bytes_sum": 9219247,               // 累计读取数据大小（从推流开始时计算）
-      "wrote_bytes_sum": 3500,                 // 累计发送数据大小
-      "bitrate_kbits": 436,                    // 最近5秒码率，单位kbit/s。对于pub类型，如无特殊声明，等价于`read_bitrate_kbits`
-      "read_bitrate"_kbits: 436,               // 最近5秒读取数据码率
-      "write_bitrate_kbits": 0                 // 最近5秒发送数据码率
+    "stream_name": "test110",
+    "app_name": "live",
+    "audio_codec": "AAC",
+    "video_codec": "H264",
+    "video_width": 1920,
+    "video_height": 1080,
+    "pub": {
+      "session_id": "RTMPPUB1",
+      "protocol": "RTMP",
+      "base_type": "PUB"
     },
-    "subs": [                                    // -----拉流的信息，可能存在多种协议，每种协议可能存在多个会话连接-----
+    "subs": [
       {
-        "session_id": "FLVSUB1",                 // 会话ID，会话全局唯一标识
-        "protocol": "FLV",                       // 拉流协议，取值范围： "RTMP" | "FLV" | "TS"
-        "base_type" "SUB"                        // 基础类型，该处固定为"SUB"
-        "start_time": "2020-10-11 19:19:21.724", // 拉流开始时间
-        "remote_addr": "127.0.0.1:61785",        // 对端地址
-        "read_bytes_sum": 134,                   // 累计读取数据大小（从拉流开始时计算）
-        "wrote_bytes_sum": 2944020,              // 累计发送数据大小
-        "bitrate_kbits": 439,                    // 最近5秒码率，单位kbit/s。对于sub类型，如无特殊声明，等价于`write_bitrate_kbits`
-        "read_bitrate_kbits": 0,                 // 最近5秒读取数据码率
-        "write_bitrate_kbits": 439               // 最近5秒发送数据码率
+        "session_id": "RTMPSUB1",
+        "protocol": "RTMP",
+        "base_type": "SUB"
+      },
+      {
+        "session_id": "whep-123",
+        "protocol": "WHEP",
+        "base_type": "SUB"
       }
     ],
-    "pull": {              // -----该节点从其他节点拉流回源信息-----
-      "base_type": "PULL", // 该处固定为"PULL"
-      ...                  // 其他字段和上面pub的内部字段相同，不再赘述
+    "pull": {
+      "base_type": "PULL"
     },
-    "pushs":[] // 主动外连转推信息，暂时不提供
-  }
-}
-```
-
-### 1.2 `/api/stat/all_group`
-
-✸ 简要描述： 查询所有group的信息
-
-✸ 请求示例：
-
-```
-$curl http://127.0.0.1:8083/api/stat/all_group
-```
-
-✸ 请求方式： `HTTP GET`
-
-✸ 请求参数： 无
-
-✸ 返回值`error_code`可能取值：
-
-- 0 查询成功
-
-✸ 返回示例：
-
-```
-{
-    "error_code": 0,
-    "desp": "succ",
-    "data": {
-        "groups": [
-            ...      // 数组内每个元素的内容格式和/api/stat/group接口中data字段相同，不再赘述
-        ]
+    "in_frame_per_sec": [],
+    "lalmax": {
+      "ext_subs": [
+        {
+          "session_id": "whep-123",
+          "protocol": "WHEP",
+          "base_type": "SUB"
+        }
+      ]
     }
-}
-```
-
-### 1.3 `/api/stat/lal_info`
-
-✸ 简要描述： 查询服务器信息
-
-✸ 请求示例：
-
-```
-$curl http://127.0.0.1:8083/api/stat/lal_info
-```
-
-✸ 请求方式： `HTTP GET`
-
-✸ 请求参数： 无
-
-✸ 返回值`error_code`可能取值：
-
-- 0 查询成功
-
-✸ 返回示例：
-
-```
-{
-  "error_code": 0,
-  "desp": "succ",
-  "data": {
-    "server_id": "1",
-    "bin_info": "GitTag=v0.17.0. GitCommitLog=bbf850aca2d4f3e55380d44ca9c3a16be60c8d39 ${NewVersion} -> version.go. GitStatus= M CHANGELOG.md | M gen_tag.sh | M pkg/base/version.go. BuildTime=2020.11.21.173812. GoVersion=go version go1.14.2 darwin/amd64. runtime=darwin/amd64.",
-    "lal_version": "v0.17.0",               // lal可执行文件版本信息
-    "api_version": "v0.1.2",                // HTTP API接口版本信息
-    "notify_version": "v0.0.4",             // HTTP Notify版本信息
-    "start_time": "2020-11-21 17:34:53.973" // lal进程启动时间
   }
 }
 ```
 
-### 2.1 `/api/ctrl/start_relay_pull`
+字段语义：
 
-✸ 简要描述： 控制服务器主动从远端拉流至本地
+- `subs`：统一后的订阅者视图，包含 `lal` 原生订阅者和 `lalmax` 扩展订阅者
+- `lalmax.ext_subs`：只包含 `lalmax` 扩展层维护的订阅者，便于业务侧区分来源
 
-✸ 请求示例：
+### `GET /api/stat/all_group`
 
-```
-$curl -H "Content-Type:application/json" -X POST -d '{"url": "rtmp://127.0.0.1/live/test110?token=aaa&p2=bbb", "pull_retry_num": 0}' http://127.0.0.1:8083/api/ctrl/start_relay_pull
-```
+查询当前所有流分组。
 
-✸ 请求方式： `HTTP POST`
+请求示例：
 
-✸ 请求参数：
-
-```
-{
-    "url": "rtmp://127.0.0.1/live/test110?token=aaa&p2=bbb", //. 必填项，回源拉流的完整url地址，目前支持rtmp和rtsp
-                                                             //
-    "stream_name": "test110",                                //. 选填项，如果不指定，则从`url`参数中解析获取
-                                                             //
-    "pull_timeout_ms": 10000,                                //. 选填项，pull建立会话的超时时间，单位毫秒。
-                                                             //  默认值是10000
-                                                             //
-    "pull_retry_num": 0,                                     //. 选填项，pull连接失败或者中途断开连接的重试次数
-                                                             //  -1  表示一直重试，直到收到stop请求，或者开启并触发下面的自动关闭功能
-                                                             //  = 0 表示不重试
-                                                             //  > 0 表示重试次数
-                                                             //  默认值是0
-                                                             //  提示：不开启自动重连，你可以在收到HTTP-Notify on_relay_pull_stop, on_update等消息时决定是否重连
-                                                             //
-    "auto_stop_pull_after_no_out_ms": -1,                    //. 选填项，没有观看者时，自动关闭pull会话，节约资源
-                                                             //  -1  表示不启动该功能
-                                                             //  = 0 表示没有观看者时，立即关闭pull会话
-                                                             //  > 0 表示没有观看者持续多长时间，关闭pull会话，单位毫秒
-                                                             //  默认值是-1
-                                                             //  提示：不开启该功能，你可以在收到HTTP-Notify on_sub_stop, on_update等消息时决定是否关闭relay pull
-                                                             //
-    "rtsp_mode": 0,                                          //. 选填项，使用rtsp时的连接方式
-                                                             //  0 tcp
-                                                             //  1 udp
-                                                             //  默认值是0
-    "debug_dump_packet": ""                                  //. 选填项，将接收的数据存成文件
-                                                             //  注意啊，有问题的时候才使用，把存储的文件提供给lal作者分析。没问题时关掉，避免性能下降并且浪费磁盘
-                                                             //  值举例："./dump/test110.laldump", "/tmp/test110.laldump"
-                                                             //  如果为空字符串""，则不会存文件
-                                                             //  默认值是""
-}
+```bash
+curl "http://127.0.0.1:1290/api/stat/all_group"
 ```
 
-✸ 返回值`error_code`可能取值：
+返回示例：
 
-- 0 请求接口成功。
-- 1002 参数错误
-- 2001 请求接口失败，失败描述参考desp
-  - "lal.logic: in stream already exist in group": 输入流已经存在了
-
-> 注意：返回成功表示lalserver收到命令并开始从远端拉流，并不保证从远端拉流成功。判断是否拉流成功，可以使用HTTP-Notify的on_relay_pull_start, on_update等回调事件
-
-✸ 返回示例：
-
-```
+```json
 {
   "error_code": 0,
   "desp": "succ",
   "data": {
-    "stream_name": "test110",
-    "session_id": "RTMPPULL1"
+    "groups": [
+      {
+        "stream_name": "test110",
+        "app_name": "live",
+        "lalmax": {
+          "ext_subs": []
+        }
+      }
+    ]
   }
 }
 ```
 
-### 2.2 `/api/ctrl/stop_relay_pull`
+其中 `groups[*]` 的结构和 `/api/stat/group` 的 `data` 完全一致。
 
-✸ 简要描述： 关闭特定的relay pull
+### `GET /api/stat/lal_info`
 
-✸ 请求示例：
+查询服务基础信息。
 
-```
-$curl http://127.0.0.1:8083/api/ctrl/stop_relay_pull?stream_name=test110
-```
+请求示例：
 
-✸ 请求方式： `HTTP GET`+url参数
-
-✸ 请求参数：
-
-- stream_name | 必填项 | 需要关闭relay pull的流名称
-
-✸ 返回值`error_code`可能取值：
-
-- 0 group存在，查询成功
-- 1001 group不存在
-- 1002 必填参数缺失
-- 1003 pull session不存在
-
-✸ 返回示例：
-
-```
-{
-  "error_code": 0,
-  "desp": "succ",
-  "data": {
-    "session_id": "RTMPPULL1"
-  }
-}
+```bash
+curl "http://127.0.0.1:1290/api/stat/lal_info"
 ```
 
-> 提示，除了stop_relay_pull，也可以使用kick_session关闭relay pull回源拉流。
+该接口直接返回内嵌 `lal` 的运行信息，常见字段包括：
 
-### 2.3 `/api/ctrl/kick_session`
+- `server_id`
+- `bin_info`
+- `lal_version`
+- `api_version`
+- `notify_version`
+- `start_time`
 
-✸ 简要描述： 强行踢出关闭指定session。session可以是pub、sub、pull类型。
+## 控制接口
 
-✸ 请求示例：
+### `POST /api/ctrl/start_relay_pull`
 
-```
-$curl -H "Content-Type:application/json" -X POST -d '{"stream_name": "test110", "session_id": "FLVSUB1"}' http://127.0.0.1:8083/api/ctrl/kick_session
-```
+让服务主动去远端拉流。
 
-✸ 请求方式： `HTTP POST`
+请求体为 JSON，必填字段：
 
-✸ 请求参数：
+- `url`
 
-```
-{
-  "stream_name": "test110", // 必填项，流名称
-  "session_id": "FLVSUB1"   // 必填项，会话唯一标识
-}
-```
+常用可选字段：
 
-✸ 返回值`error_code`可能取值：
+- `stream_name`
+- `pull_timeout_ms`
+- `pull_retry_num`
+- `auto_stop_pull_after_no_out_ms`
+- `rtsp_mode`
+- `debug_dump_packet`
 
-- 0 请求接口成功。指定会话被关闭
-- 1001 指定流名称对应的group不存在
-- 1002 参数错误
-- 1003 指定会话不存在
+当前程序里的默认值如下：
 
-✸ 返回示例：
+- `pull_timeout_ms` 默认 `10000`
+- `pull_retry_num` 默认 `0`
+- `auto_stop_pull_after_no_out_ms` 默认 `-1`
+- `rtsp_mode` 默认 `0`，也就是 TCP
 
-```
-{
-  "error_code": 0,
-  "desp": "succ"
-}
-```
+请求示例：
 
-### 2.4 `/api/ctrl/start_rtp_pub`
-
-✸ 简要描述： 打开GB28181接收端口
-
-✸ 请求示例：
-
-```
-$curl -H "Content-Type:application/json" -X POST -d '{"stream_name": "test110", "port": 0, "timeout_ms": 10000}' http://127.0.0.1:8083/api/ctrl/start_rtp_pub
+```bash
+curl -H "Content-Type: application/json" \
+  -X POST \
+  -d "{\"url\":\"rtmp://127.0.0.1/live/test110\"}" \
+  "http://127.0.0.1:1290/api/ctrl/start_relay_pull"
 ```
 
-✸ 请求方式： `HTTP POST`
+说明：
 
-✸ 请求参数：
+- 接口返回成功，只代表命令已经被接受
+- 是否真的拉流成功，需要看后续状态接口，或者看 Hook 事件中的 `on_relay_pull_start`、`on_update`
 
-```
-{
-  "stream_name": "test110", //. 必填项，流名称，后续这条流都与这个流名称绑定，比如生成的录制文件名，用其他协议拉流的流名称等
-                            //
-  "port": 0,                //. 选填项，接收端口
-                            //  如果为0，lalserver选择一个随机端口，并将端口通过返回值返回给调用方
-                            //  默认值是0
-                            //
-  "timeout_ms": 60000,      //. 选填项，超时时间，单位毫秒，开启时或中途超过这个时长没有收到任何数据，则关闭端口监听
-                            //  如果为0，则不会超时关闭
-                            //  默认值是60000
-                            //
-  "is_tcp_flag": 0,         //. 选填项，是否使用tcp传输流媒体音视频数据
-                            //  如果为1，使用tcp；如果为0，使用udp
-                            //  默认值为0
-  "debug_dump_packet": ""   //. 选填项，将接收的udp数据存成文件
-                            //  注意啊，有问题的时候才使用，把存储的文件提供给lal作者分析。没问题时关掉，避免性能下降并且浪费磁盘
-                            //  值举例："./dump/test110.laldump", "/tmp/test110.laldump"
-                            //  如果为空字符串""，则不会存文件
-                            //  默认值是""
-}
+### `GET /api/ctrl/stop_relay_pull`
+### `POST /api/ctrl/stop_relay_pull`
+
+关闭指定的 relay pull 会话。
+
+当前实现里，这个接口无论用 `GET` 还是 `POST`，都从查询参数里读取：
+
+- `stream_name`：必填
+
+请求示例：
+
+```bash
+curl "http://127.0.0.1:1290/api/ctrl/stop_relay_pull?stream_name=test110"
+curl -X POST "http://127.0.0.1:1290/api/ctrl/stop_relay_pull?stream_name=test110"
 ```
 
-✸ 返回值`error_code`可能取值：
+说明：
 
-- 0 请求接口成功。端口成功打开
-- 1002 参数错误
-- 2002 绑定监听端口失败
+- 也可以用 `kick_session` 关闭 pull 会话
 
-✸ 返回示例：
+### `POST /api/ctrl/kick_session`
 
+强制关闭指定会话。
+
+请求体为 JSON，必填字段：
+
+- `stream_name`
+- `session_id`
+
+请求示例：
+
+```bash
+curl -H "Content-Type: application/json" \
+  -X POST \
+  -d "{\"stream_name\":\"test110\",\"session_id\":\"FLVSUB1\"}" \
+  "http://127.0.0.1:1290/api/ctrl/kick_session"
 ```
-{
-  "error_code": 0,
-  "desp": "succ",
-  "data": {
-    "stream_name": "test110",
-    "session_id": "PSSUB1",
-    "port": 20000
-  }
-}
+
+适用对象：
+
+- 推流会话
+- 拉流会话
+- relay pull 会话
+
+### `POST /api/ctrl/start_rtp_pub`
+
+打开一个 GB28181/RTP 接收会话。
+
+请求体为 JSON，必填字段：
+
+- `stream_name`
+
+常用可选字段：
+
+- `port`
+- `timeout_ms`
+- `is_tcp_flag`
+- `debug_dump_packet`
+
+当前程序里的默认值：
+
+- `timeout_ms` 默认 `60000`
+
+请求示例：
+
+```bash
+curl -H "Content-Type: application/json" \
+  -X POST \
+  -d "{\"stream_name\":\"gb28181-test\",\"port\":0}" \
+  "http://127.0.0.1:1290/api/ctrl/start_rtp_pub"
 ```
+
+说明：
+
+- `port=0` 表示由服务自动分配端口
+- 成功后会返回 `session_id` 和最终监听端口
+
+### `POST /api/ctrl/stop_rtp_pub`
+
+关闭 GB28181/RTP 接收会话。
+
+当前实现支持两种传参方式：
+
+- 查询参数：`stream_name` 或 `session_id`
+- JSON 请求体：`stream_name` 或 `session_id`
+
+两者至少传一个。
+
+请求示例：
+
+```bash
+curl -X POST "http://127.0.0.1:1290/api/ctrl/stop_rtp_pub?stream_name=gb28181-test"
+curl -H "Content-Type: application/json" \
+  -X POST \
+  -d "{\"session_id\":\"PSSUB1\"}" \
+  "http://127.0.0.1:1290/api/ctrl/stop_rtp_pub"
+```
+
+成功后会返回被关闭的 `session_id`。
+
+## Hook 接口
+
+### `GET /api/hook/recent`
+
+读取最近的 Hook 事件快照。
+
+常用查询参数：
+
+- `limit`：返回条数，默认 `20`
+- `app_name`
+- `stream_name`
+- `session_id`
+- `event`
+- `events`：多个事件名，逗号分隔
+
+请求示例：
+
+```bash
+curl "http://127.0.0.1:1290/api/hook/recent?limit=5"
+curl "http://127.0.0.1:1290/api/hook/recent?stream_name=test110&events=on_group_start,on_stream_active,on_group_stop,on_update"
+```
+
+### `GET /api/hook/stream`
+
+使用 SSE 持续订阅 Hook 事件。
+
+它和 `/api/hook/recent` 使用同一套过滤参数。连接建立后，会先回放最近一批命中的事件，然后继续推送实时事件。
+
+请求示例：
+
+```bash
+curl -N "http://127.0.0.1:1290/api/hook/stream"
+curl -N "http://127.0.0.1:1290/api/hook/stream?stream_name=test110&events=on_update,on_group_stop"
+```
+
+返回格式示例：
+
+```text
+id: 12
+event: on_pub_start
+data: {"server_id":"1","session_id":"RTMPPUB1","protocol":"RTMP","base_type":"PUB","stream_name":"test110"}
+```
+
+当前 Hook 体系里的事件名称、语义、过滤规则和插件化接入方式，请直接参考 [hook_api.md](./hook_api.md) 和 [hook_plugin_architecture.md](./hook_plugin_architecture.md)。
