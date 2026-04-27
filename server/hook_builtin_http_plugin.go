@@ -22,55 +22,55 @@ func (p *hookBuiltinHTTPPlugin) OnHookEvent(event HookEvent) error {
 	switch event.Event {
 	case HookEventServerStart:
 		if p.hub.cfg.OnServerStart != "" {
-			p.hub.asyncPost(p.hub.cfg.OnServerStart, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnServerStart, event)
 		}
 	case HookEventUpdate:
 		if p.hub.cfg.OnUpdate != "" {
-			p.hub.notifyUpdateAsyncPost(p.hub.cfg.OnUpdate, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnUpdate, event)
 		}
 	case HookEventGroupStart:
 		if p.hub.cfg.OnGroupStart != "" {
-			p.hub.asyncPost(p.hub.cfg.OnGroupStart, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnGroupStart, event)
 		}
 	case HookEventGroupStop:
 		if p.hub.cfg.OnGroupStop != "" {
-			p.hub.asyncPost(p.hub.cfg.OnGroupStop, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnGroupStop, event)
 		}
 	case HookEventStreamActive:
 		if p.hub.cfg.OnStreamActive != "" {
-			p.hub.asyncPost(p.hub.cfg.OnStreamActive, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnStreamActive, event)
 		}
 	case HookEventPubStart:
 		if p.hub.cfg.OnPubStart != "" {
-			p.hub.asyncPost(p.hub.cfg.OnPubStart, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnPubStart, event)
 		}
 	case HookEventPubStop:
 		if p.hub.cfg.OnPubStop != "" {
-			p.hub.asyncPost(p.hub.cfg.OnPubStop, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnPubStop, event)
 		}
 	case HookEventSubStart:
 		if p.hub.cfg.OnSubStart != "" {
-			p.hub.asyncPost(p.hub.cfg.OnSubStart, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnSubStart, event)
 		}
 	case HookEventSubStop:
 		if p.hub.cfg.OnSubStop != "" {
-			p.hub.asyncPost(p.hub.cfg.OnSubStop, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnSubStop, event)
 		}
 	case HookEventRelayPullStart:
 		if p.hub.cfg.OnRelayPullStart != "" {
-			p.hub.asyncPost(p.hub.cfg.OnRelayPullStart, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnRelayPullStart, event)
 		}
 	case HookEventRelayPullStop:
 		if p.hub.cfg.OnRelayPullStop != "" {
-			p.hub.asyncPost(p.hub.cfg.OnRelayPullStop, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnRelayPullStop, event)
 		}
 	case HookEventRtmpConnect:
 		if p.hub.cfg.OnRtmpConnect != "" {
-			p.hub.asyncPost(p.hub.cfg.OnRtmpConnect, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnRtmpConnect, event)
 		}
 	case HookEventHlsMakeTs:
 		if p.hub.cfg.OnHlsMakeTs != "" {
-			p.hub.asyncPost(p.hub.cfg.OnHlsMakeTs, event.Payload)
+			p.hub.asyncPostEvent(p.hub.cfg.OnHlsMakeTs, event)
 		}
 	}
 

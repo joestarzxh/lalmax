@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +30,12 @@ type maxlogicTestSubscriber struct {
 	stat maxlogic.SubscriberStat
 }
 
+type hookHTTPPayload struct {
+	SessionID  string `json:"session_id"`
+	AppName    string `json:"app_name"`
+	StreamName string `json:"stream_name"`
+}
+
 func (s *maxlogicTestSubscriber) OnMsg(msg base.RtmpMsg) {}
 
 func (s *maxlogicTestSubscriber) OnStop() {}
@@ -46,8 +54,15 @@ func (p *testHookPlugin) OnHookEvent(event HookEvent) error {
 }
 
 var max *LalMaxServer
+var onUpdateHook func(base.UpdateInfo)
+var onUpdateHookMu sync.RWMutex
+var testSeq atomic.Int64
 
 const httpNotifyAddr = ":55559"
+
+func uniqueTestName(prefix string) string {
+	return fmt.Sprintf("%s_%d", prefix, testSeq.Add(1))
+}
 
 func findTestGroup(groups []LalmaxStatGroup, streamName string) *LalmaxStatGroup {
 	for i := range groups {
@@ -77,12 +92,40 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+
+	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var out base.UpdateInfo
+		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		onUpdateHookMu.RLock()
+		hook := onUpdateHook
+		onUpdateHookMu.RUnlock()
+		if hook != nil {
+			hook(out)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ln, err := net.Listen("tcp", httpNotifyAddr)
+	if err != nil {
+		panic(err)
+	}
+	go func() {
+		_ = http.Serve(ln, nil)
+	}()
+
 	go max.Run()
 	os.Exit(m.Run())
 }
 
 func TestAllGroup(t *testing.T) {
-	streamName := "test_all_group"
+	streamName := uniqueTestName("test_all_group")
 	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
 		t.Fatal(err)
@@ -146,8 +189,30 @@ func TestAllGroup(t *testing.T) {
 }
 
 func TestNotifyUpdate(t *testing.T) {
-	streamName := "notify_test"
-	consumerID := "consumer_notify"
+	streamName := uniqueTestName("notify_test")
+	consumerID := uniqueTestName("consumer_notify")
+	matched := make(chan struct{}, 1)
+
+	onUpdateHookMu.Lock()
+	onUpdateHook = func(out base.UpdateInfo) {
+		for _, group := range out.Groups {
+			for _, sub := range group.StatSubs {
+				if sub.SessionId == consumerID {
+					select {
+					case matched <- struct{}{}:
+					default:
+					}
+					return
+				}
+			}
+		}
+	}
+	onUpdateHookMu.Unlock()
+	t.Cleanup(func() {
+		onUpdateHookMu.Lock()
+		onUpdateHook = nil
+		onUpdateHookMu.Unlock()
+	})
 
 	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
@@ -156,22 +221,11 @@ func TestNotifyUpdate(t *testing.T) {
 	ss, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, max.hlssvr, 1, 0)
 	ss.AddConsumer(consumerID, nil)
 
-	http.HandleFunc("/on_update", func(w http.ResponseWriter, r *http.Request) {
-		var out base.UpdateInfo
-		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
-			t.Fatal(err)
-		}
-		for _, group := range out.Groups {
-			for _, sub := range group.StatSubs {
-				if sub.SessionId == consumerID {
-					return
-				}
-			}
-		}
-		t.Fatal("SessionId err")
-	})
-	go http.ListenAndServe(httpNotifyAddr, nil)
-	time.Sleep(time.Second * 3)
+	select {
+	case <-matched:
+	case <-time.After(5 * time.Second):
+		t.Fatal("did not receive on_update with expected SessionId")
+	}
 }
 
 func TestRtpPubStartStop(t *testing.T) {
@@ -234,7 +288,7 @@ func TestStatGroupWithAppName(t *testing.T) {
 }
 
 func TestStatGroupIncludesLalmaxExtSubs(t *testing.T) {
-	streamName := "test_stat_group_ext"
+	streamName := uniqueTestName("test_stat_group_ext")
 
 	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
@@ -274,7 +328,7 @@ func TestStatGroupIncludesLalmaxExtSubs(t *testing.T) {
 }
 
 func TestStatGroupIncludesLalmaxExtSubsRuntimeFields(t *testing.T) {
-	streamName := "test_stat_group_runtime"
+	streamName := uniqueTestName("test_stat_group_runtime")
 
 	_, err := max.lalsvr.AddCustomizePubSession(streamName)
 	if err != nil {
@@ -477,6 +531,213 @@ func TestBuiltinHTTPPluginRespectsEnableFlag(t *testing.T) {
 
 	if got := requestCount.Load(); got != 0 {
 		t.Fatalf("unexpected webhook request count: %d", got)
+	}
+}
+
+func TestBuiltinHTTPPluginPreservesOrderPerStream(t *testing.T) {
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	allowFirstFinish := make(chan struct{})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload hookHTTPPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		switch payload.SessionID {
+		case "first":
+			close(firstStarted)
+			<-allowFirstFinish
+		case "second":
+			close(secondStarted)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	hub := NewHttpNotify(config.HttpNotifyConfig{
+		Enable:     true,
+		OnPubStart: ts.URL,
+		OnPubStop:  ts.URL,
+	}, "hub-test")
+
+	hub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "first",
+			AppName:    "live",
+			StreamName: "same-stream",
+		},
+	})
+	hub.NotifyPubStop(base.PubStopInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "second",
+			AppName:    "live",
+			StreamName: "same-stream",
+		},
+	})
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first webhook did not start in time")
+	}
+
+	select {
+	case <-secondStarted:
+		t.Fatal("second webhook started before the first one finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(allowFirstFinish)
+
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second webhook did not start after the first one finished")
+	}
+}
+
+func TestBuiltinHTTPPluginAllowsParallelAcrossStreams(t *testing.T) {
+	firstStarted := make(chan struct{})
+	secondStreamStarted := make(chan struct{})
+	allowFirstFinish := make(chan struct{})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload hookHTTPPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		switch payload.StreamName {
+		case "stream-a":
+			close(firstStarted)
+			<-allowFirstFinish
+		case "stream-b":
+			close(secondStreamStarted)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	hub := NewHttpNotify(config.HttpNotifyConfig{
+		Enable:     true,
+		OnPubStart: ts.URL,
+	}, "hub-test")
+
+	hub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "stream-a-session",
+			AppName:    "live",
+			StreamName: "stream-a",
+		},
+	})
+	hub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "stream-b-session",
+			AppName:    "live",
+			StreamName: "stream-b",
+		},
+	})
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first stream webhook did not start in time")
+	}
+
+	select {
+	case <-secondStreamStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second stream webhook was blocked by the first stream")
+	}
+
+	close(allowFirstFinish)
+}
+
+func TestBuiltinHTTPPluginPreservesOrderAcrossDifferentURLsForSameStream(t *testing.T) {
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	allowFirstFinish := make(chan struct{})
+
+	startTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload hookHTTPPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode start payload failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		close(firstStarted)
+		<-allowFirstFinish
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer startTS.Close()
+
+	stopTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var payload hookHTTPPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode stop payload failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		close(secondStarted)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stopTS.Close()
+
+	hub := NewHttpNotify(config.HttpNotifyConfig{
+		Enable:     true,
+		OnPubStart: startTS.URL,
+		OnPubStop:  stopTS.URL,
+	}, "hub-test")
+
+	hub.NotifyPubStart(base.PubStartInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "first",
+			AppName:    "live",
+			StreamName: "same-stream",
+		},
+	})
+	hub.NotifyPubStop(base.PubStopInfo{
+		SessionEventCommonInfo: base.SessionEventCommonInfo{
+			SessionId:  "second",
+			AppName:    "live",
+			StreamName: "same-stream",
+		},
+	})
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("start webhook did not start in time")
+	}
+
+	select {
+	case <-secondStarted:
+		t.Fatal("stop webhook started before start webhook finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(allowFirstFinish)
+
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stop webhook did not start after start webhook finished")
 	}
 }
 
