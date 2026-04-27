@@ -132,6 +132,27 @@ func (s *selfRemovingSubscriber) markerAt(idx int) byte {
 	return payloadMarker(s.msgs[idx])
 }
 
+type statSubscriber struct {
+	mu   sync.Mutex
+	stat SubscriberStat
+}
+
+func (s *statSubscriber) OnMsg(msg base.RtmpMsg) {}
+
+func (s *statSubscriber) OnStop() {}
+
+func (s *statSubscriber) GetSubscriberStat() SubscriberStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stat
+}
+
+func (s *statSubscriber) setStat(stat SubscriberStat) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stat = stat
+}
+
 func videoSeqHeader(marker byte) base.RtmpMsg {
 	return base.RtmpMsg{
 		Header: base.RtmpHeader{MsgTypeId: base.RtmpTypeIdVideo},
@@ -204,6 +225,22 @@ func payloadMarker(msg base.RtmpMsg) byte {
 func newTestGroup(streamName string) *Group {
 	group, _ := GetGroupManagerInstance().GetOrCreateGroupByStreamName(streamName, streamName, nil, 1, 0)
 	return group
+}
+
+func testSubscriberState(t *testing.T, group *Group, subscriberID string) *subscriberState {
+	t.Helper()
+
+	value, ok := group.consumers.Load(subscriberID)
+	if !ok {
+		t.Fatalf("subscriber %s not found", subscriberID)
+	}
+
+	state, ok := value.(*subscriberState)
+	if !ok {
+		t.Fatalf("subscriber %s has unexpected type %T", subscriberID, value)
+	}
+
+	return state
 }
 
 func TestAddConsumerReplaysCachedGopImmediately(t *testing.T) {
@@ -606,6 +643,32 @@ func TestOnStopIsIdempotentAndClosesSubscribers(t *testing.T) {
 	}
 }
 
+func TestOnMsgTriggersActiveHookOnceOnFirstMediaPacket(t *testing.T) {
+	group := newTestGroup("test-active-hook")
+	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-active-hook")
+
+	key := StreamKeyFromStreamName("test-active-hook")
+	var got []StreamKey
+	group.BindActiveHook(key, func(k StreamKey) {
+		got = append(got, k)
+	})
+
+	group.OnMsg(videoSeqHeader(1))
+	group.OnMsg(aacSeqHeader(2))
+	if len(got) != 0 {
+		t.Fatalf("active hook count after seq header = %d, want 0", len(got))
+	}
+	group.OnMsg(videoKeyNalu(3))
+	group.OnMsg(aacRaw(4))
+
+	if len(got) != 1 {
+		t.Fatalf("active hook count = %d, want 1", len(got))
+	}
+	if got[0] != key {
+		t.Fatalf("active hook key = %+v, want %+v", got[0], key)
+	}
+}
+
 func TestAddSubscriberAfterStopIsIgnored(t *testing.T) {
 	group := newTestGroup("test-add-after-stop")
 	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-add-after-stop")
@@ -640,5 +703,68 @@ func TestDuplicateSubscriberIDIsIgnored(t *testing.T) {
 	}
 	if second.len() != 0 {
 		t.Fatalf("duplicate subscriber messages = %d, want 0", second.len())
+	}
+}
+
+func TestStatSubscribersRefreshRuntimeStats(t *testing.T) {
+	group := newTestGroup("test-stat-refresh")
+	defer GetGroupManagerInstance().RemoveGroupByStreamName("test-stat-refresh")
+
+	sub := &statSubscriber{}
+	sub.setStat(SubscriberStat{
+		RemoteAddr:    "127.0.0.1:9000",
+		ReadBytesSum:  1024,
+		WroteBytesSum: 2048,
+	})
+	group.AddSubscriber(SubscriberInfo{
+		SubscriberID: "stat-sub",
+		Protocol:     SubscriberProtocolWHEP,
+	}, sub)
+
+	state := testSubscriberState(t, group, "stat-sub")
+	state.UpdateStat(2)
+
+	subs := group.StatSubscribers()
+	if len(subs) != 1 {
+		t.Fatalf("subscriber count = %d, want 1", len(subs))
+	}
+
+	stat := subs[0]
+	if stat.RemoteAddr != "127.0.0.1:9000" {
+		t.Fatalf("remote addr = %s, want 127.0.0.1:9000", stat.RemoteAddr)
+	}
+	if stat.ReadBytesSum != 1024 {
+		t.Fatalf("read bytes = %d, want 1024", stat.ReadBytesSum)
+	}
+	if stat.WroteBytesSum != 2048 {
+		t.Fatalf("wrote bytes = %d, want 2048", stat.WroteBytesSum)
+	}
+	if stat.ReadBitrateKbits != 4 {
+		t.Fatalf("read bitrate = %d, want 4", stat.ReadBitrateKbits)
+	}
+	if stat.WriteBitrateKbits != 8 {
+		t.Fatalf("write bitrate = %d, want 8", stat.WriteBitrateKbits)
+	}
+	if stat.BitrateKbits != 8 {
+		t.Fatalf("bitrate = %d, want 8", stat.BitrateKbits)
+	}
+
+	sub.setStat(SubscriberStat{
+		RemoteAddr:    "127.0.0.1:9001",
+		ReadBytesSum:  1536,
+		WroteBytesSum: 3072,
+	})
+	state.UpdateStat(1)
+
+	subs = group.StatSubscribers()
+	stat = subs[0]
+	if stat.RemoteAddr != "127.0.0.1:9001" {
+		t.Fatalf("remote addr = %s, want 127.0.0.1:9001", stat.RemoteAddr)
+	}
+	if stat.ReadBitrateKbits != 4 {
+		t.Fatalf("read bitrate after increment = %d, want 4", stat.ReadBitrateKbits)
+	}
+	if stat.WriteBitrateKbits != 8 {
+		t.Fatalf("write bitrate after increment = %d, want 8", stat.WriteBitrateKbits)
 	}
 }

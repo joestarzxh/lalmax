@@ -12,7 +12,7 @@ lalmax.conf.json 配置主要由 2 部分组成
 
 (1) lalmax: lalmax 扩展能力配置，例如 SRT、RTC、HTTP-FMP4、GB28181 等，具体配置说明见[config.md](./document/config.md)
 
-(2) lal: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等，具体配置说明见[lal_config.md](./document/lal_config.md)，原生 HTTP API 见[lal_api.md](./document/lal_api.md)
+(2) lal: lal 原生配置，例如 RTMP、RTSP、HTTP-FLV、HLS-TS、录制、鉴权等，具体配置说明见[lal_config.md](./document/lal_config.md)。对外建议统一使用 lalmax 的 API Gateway、HTTP API 和 Hook API 门面；`lal.http_api` 仅建议在调试 lal 原生行为时临时开启，说明见[api_gateway.md](./document/api_gateway.md)、[lal_api.md](./document/lal_api.md)、[hook_api.md](./document/hook_api.md) 与 [hook_plugin_architecture.md](./document/hook_plugin_architecture.md)
 
 旧版平铺配置和 lal_config_path 仍兼容，但推荐使用 lalmax/lal 两个顶层标签维护单个配置文件。
 
@@ -20,7 +20,7 @@ lalmax.conf.json 配置主要由 2 部分组成
 ```
 docker build -t lalmax:init ./
 
-docker run -it -p 1935:1935 -p 8080:8080 -p 4433:4433 -p 5544:5544 -p 8083:8083 -p 8084:8084 -p 30000-30100:30000-30100/udp -p 1290:1290 -p 6001:6001/udp lalmax:init
+docker run -it -p 1935:1935 -p 8080:8080 -p 4433:4433 -p 5544:5544 -p 8084:8084 -p 30000-30100:30000-30100/udp -p 1290:1290 -p 6001:6001/udp lalmax:init
 
 ```
 

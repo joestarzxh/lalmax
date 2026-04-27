@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gofrs/uuid"
 	"github.com/pion/webrtc/v3"
@@ -32,6 +33,8 @@ type jessibucaSession struct {
 	streamId     string
 	cancel       context.CancelFunc
 	stopOne      sync.Once
+	wroteBytes   atomic.Uint64
+	remoteAddr   atomic.Value
 }
 
 func NewJessibucaSession(appName, streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *jessibucaSession {
@@ -121,6 +124,8 @@ func (conn *jessibucaSession) Run() {
 					nazalog.Warnf(" stream write videoHeader err:%s", err.Error())
 					return
 				}
+				conn.wroteBytes.Add(uint64(len(httpflv.FlvHeader)))
+				conn.refreshRemoteAddr()
 
 				defer func() {
 					nazalog.Info("RemoveConsumer, connid:", conn.subscriberId)
@@ -142,6 +147,7 @@ func (conn *jessibucaSession) Run() {
 								nazalog.Warnf(" stream write msg err:%s", err.Error())
 								return
 							}
+							conn.wroteBytes.Add(uint64(len(v)))
 						}
 
 					case <-conn.closeChan:
@@ -199,4 +205,38 @@ func (conn *jessibucaSession) Close() {
 	if conn.pc != nil {
 		conn.pc.Close()
 	}
+}
+
+func (conn *jessibucaSession) GetSubscriberStat() maxlogic.SubscriberStat {
+	conn.refreshRemoteAddr()
+	return maxlogic.SubscriberStat{
+		RemoteAddr:    conn.loadRemoteAddr(),
+		WroteBytesSum: conn.wroteBytes.Load(),
+	}
+}
+
+func (conn *jessibucaSession) refreshRemoteAddr() {
+	if remoteAddr := conn.currentRemoteAddr(); remoteAddr != "" {
+		conn.remoteAddr.Store(remoteAddr)
+	}
+}
+
+func (conn *jessibucaSession) currentRemoteAddr() string {
+	if conn.DC != nil && conn.DC.Transport() != nil {
+		if dtls := conn.DC.Transport().Transport(); dtls != nil {
+			if remoteAddr := remoteAddrFromDTLSTransport(dtls); remoteAddr != "" {
+				return remoteAddr
+			}
+		}
+	}
+	if sctp := conn.pc.SCTP(); sctp != nil {
+		return remoteAddrFromDTLSTransport(sctp.Transport())
+	}
+	return ""
+}
+
+func (conn *jessibucaSession) loadRemoteAddr() string {
+	v := conn.remoteAddr.Load()
+	addr, _ := v.(string)
+	return addr
 }

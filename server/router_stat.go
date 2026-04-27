@@ -16,7 +16,7 @@ func (s *LalMaxServer) initStatRouter(router *gin.Engine, handlers ...gin.Handle
 }
 
 func (s *LalMaxServer) statGroupHandler(c *gin.Context) {
-	var v base.ApiStatGroupResp
+	var v ApiStatGroupResp
 	streamName := c.Query("stream_name")
 	if streamName == "" {
 		v.ErrorCode = base.ErrorCodeParamMissing
@@ -25,34 +25,25 @@ func (s *LalMaxServer) statGroupHandler(c *gin.Context) {
 		return
 	}
 	appName := c.Query("app_name")
-	v.Data = s.lalsvr.StatGroup(streamName)
-	if v.Data == nil {
+	view := s.stats.FindGroupView(s.lalsvr.StatAllGroup(), maxlogic.NewStreamKey(appName, streamName))
+	if view == nil {
 		v.ErrorCode = base.ErrorCodeGroupNotFound
 		v.Desp = base.DespGroupNotFound
 		c.JSON(http.StatusOK, v)
 		return
 	}
-	exist, session := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(appName, streamName))
-	if exist {
-		v.Data.StatSubs = append(v.Data.StatSubs, session.StatSubscribers()...)
-	}
+	group := newLalmaxStatGroup(*view)
+	v.Data = &group
 	v.ErrorCode = base.ErrorCodeSucc
 	v.Desp = base.DespSucc
 	c.JSON(http.StatusOK, v)
 }
 
 func (s *LalMaxServer) statAllGroupHandler(c *gin.Context) {
-	var out base.ApiStatAllGroupResp
+	var out ApiStatAllGroupResp
 	out.ErrorCode = base.ErrorCodeSucc
 	out.Desp = base.DespSucc
-	groups := s.lalsvr.StatAllGroup()
-	for i, group := range groups {
-		exist, session := maxlogic.GetGroupManagerInstance().GetGroup(maxlogic.NewStreamKey(group.AppName, group.StreamName))
-		if exist {
-			groups[i].StatSubs = append(groups[i].StatSubs, session.StatSubscribers()...)
-		}
-	}
-	out.Data.Groups = groups
+	out.Data.Groups = newLalmaxStatGroups(s.stats.BuildGroupsView(s.lalsvr.StatAllGroup()))
 	c.JSON(http.StatusOK, out)
 }
 

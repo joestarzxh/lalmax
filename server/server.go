@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/q191201771/lalmax/srt"
 
@@ -20,6 +22,7 @@ import (
 	config "github.com/q191201771/lalmax/config"
 
 	"github.com/gin-gonic/gin"
+	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
@@ -27,6 +30,8 @@ import (
 type LalMaxServer struct {
 	lalsvr      logic.ILalServer
 	conf        *config.Config
+	stats       *maxlogic.StatAggregator
+	notifyHub   *HttpNotify
 	srtsvr      *srt.SrtServer
 	rtcsvr      *rtc.RtcServer
 	router      *gin.Engine
@@ -37,18 +42,21 @@ type LalMaxServer struct {
 }
 
 func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
+	notifyHub := NewHttpNotify(conf.HttpNotifyConfig, conf.ServerId)
 	lalsvr := logic.NewLalServer(func(option *logic.Option) {
 		if len(conf.LalRawContent) != 0 {
 			option.ConfRawContent = conf.LalRawContent
 		} else {
 			option.ConfFilename = conf.LalSvrConfigPath
 		}
-		option.NotifyHandler = NewHttpNotify(conf.HttpNotifyConfig, conf.ServerId)
+		option.NotifyHandler = notifyHub
 	})
 
 	maxsvr := &LalMaxServer{
 		lalsvr:    lalsvr,
 		conf:      conf,
+		stats:     maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
+		notifyHub: notifyHub,
 		rtpPubMgr: rtppub.NewManager(lalsvr, conf.GB28181Config.MediaConfig),
 	}
 
@@ -88,7 +96,32 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 
 func (s *LalMaxServer) Run() (err error) {
 	s.lalsvr.WithOnHookSession(func(uniqueKey string, streamName string) logic.ICustomizeHookSessionContext {
-		group, _ := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(uniqueKey, streamName, s.hlssvr, s.conf.LogicConfig.GopCacheNum, s.conf.LogicConfig.SingleGopMaxFrameNum)
+		key := maxlogic.StreamKeyFromStreamName(streamName)
+		group, created := maxlogic.GetGroupManagerInstance().GetOrCreateGroupByStreamName(uniqueKey, streamName, s.hlssvr, s.conf.LogicConfig.GopCacheNum, s.conf.LogicConfig.SingleGopMaxFrameNum)
+		group.BindActiveHook(key, func(activeKey maxlogic.StreamKey) {
+			if s.notifyHub == nil || !activeKey.Valid() {
+				return
+			}
+			s.notifyHub.NotifyStreamActive(HookGroupInfo{
+				AppName:    activeKey.AppName,
+				StreamName: activeKey.StreamName,
+			})
+		})
+		group.BindStopHook(key, func(stopKey maxlogic.StreamKey) {
+			if s.notifyHub == nil || !stopKey.Valid() {
+				return
+			}
+			s.notifyHub.NotifyGroupStop(HookGroupInfo{
+				AppName:    stopKey.AppName,
+				StreamName: stopKey.StreamName,
+			})
+		})
+		if created && s.notifyHub != nil {
+			s.notifyHub.NotifyGroupStart(HookGroupInfo{
+				AppName:    key.AppName,
+				StreamName: key.StreamName,
+			})
+		}
 		return group
 	})
 
@@ -98,6 +131,8 @@ func (s *LalMaxServer) Run() (err error) {
 	if s.srtsvr != nil {
 		go s.srtsvr.Run(ctx)
 	}
+
+	go s.runPeriodicUpdate(ctx)
 
 	go func() {
 		nazalog.Infof("lalmax http listen. addr=%s", s.conf.HttpConfig.ListenAddr)
@@ -117,4 +152,40 @@ func (s *LalMaxServer) Run() (err error) {
 	}
 
 	return s.lalsvr.RunLoop()
+}
+
+func (s *LalMaxServer) runPeriodicUpdate(ctx context.Context) {
+	if s == nil || s.notifyHub == nil || s.lalsvr == nil {
+		return
+	}
+
+	intervalSec := s.conf.HttpNotifyConfig.UpdateIntervalSec
+	if intervalSec <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.notifyHub.NotifyUpdate(base.UpdateInfo{
+				Groups: s.lalsvr.StatAllGroup(),
+			})
+		}
+	}
+}
+
+func (s *LalMaxServer) HookHub() *HttpNotify {
+	return s.notifyHub
+}
+
+func (s *LalMaxServer) RegisterHookPlugin(plugin HookPlugin, options HookPluginOptions) (func(), error) {
+	if s == nil || s.notifyHub == nil {
+		return nil, fmt.Errorf("hook hub not initialized")
+	}
+	return s.notifyHub.RegisterPlugin(plugin, options)
 }

@@ -171,3 +171,19 @@ func (session *HttpFmp4Session) OnStop() {
 		session.group.RemoveSubscriber(session.subscriberId)
 	}
 }
+
+func (session *HttpFmp4Session) GetSubscriberStat() maxlogic.SubscriberStat {
+	if session == nil || session.conn == nil {
+		return maxlogic.SubscriberStat{}
+	}
+
+	connStat := session.conn.GetStat()
+	stat := maxlogic.SubscriberStat{
+		ReadBytesSum:  connStat.ReadBytesSum,
+		WroteBytesSum: connStat.WroteBytesSum,
+	}
+	if remoteAddr := session.conn.RemoteAddr(); remoteAddr != nil {
+		stat.RemoteAddr = remoteAddr.String()
+	}
+	return stat
+}

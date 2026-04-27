@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	maxlogic "github.com/q191201771/lalmax/logic"
 	"github.com/smallnest/chanx"
 
 	"github.com/gofrs/uuid"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
@@ -27,6 +29,8 @@ type whepSession struct {
 	lalServer      logic.ILalServer
 	videoTrack     *webrtc.TrackLocalStaticRTP
 	audioTrack     *webrtc.TrackLocalStaticRTP
+	videoSender    *webrtc.RTPSender
+	audioSender    *webrtc.RTPSender
 	videopacker    *Packer
 	audiopacker    *Packer
 	msgChan        *chanx.UnboundedChan[base.RtmpMsg]
@@ -37,6 +41,8 @@ type whepSession struct {
 	paceBaseAt     time.Time
 	paceStarted    bool
 	replayingCache bool
+	wroteBytes     atomic.Uint64
+	remoteAddr     atomic.Value
 }
 
 func NewWhepSession(appName, streamid string, writeChanSize int, pc *peerConnection, lalServer logic.ILalServer) *whepSession {
@@ -70,7 +76,7 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 				return
 			}
 
-			_, err = conn.pc.AddTrack(conn.videoTrack)
+			conn.videoSender, err = conn.pc.AddTrack(conn.videoTrack)
 			if err != nil {
 				nazalog.Error(err)
 				return
@@ -84,7 +90,7 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 				return
 			}
 
-			_, err = conn.pc.AddTrack(conn.videoTrack)
+			conn.videoSender, err = conn.pc.AddTrack(conn.videoTrack)
 			if err != nil {
 				nazalog.Error(err)
 				return
@@ -128,7 +134,7 @@ func (conn *whepSession) GetAnswerSDP(offer string) (sdp string) {
 		}
 
 		if conn.audioTrack != nil {
-			_, err = conn.pc.AddTrack(conn.audioTrack)
+			conn.audioSender, err = conn.pc.AddTrack(conn.audioTrack)
 			if err != nil {
 				nazalog.Error(err)
 				return
@@ -226,6 +232,7 @@ connected:
 
 func (conn *whepSession) signalConnected() {
 	conn.connectedOnce.Do(func() {
+		conn.refreshRemoteAddr()
 		conn.connectedChan <- struct{}{}
 	})
 }
@@ -308,6 +315,7 @@ func (conn *whepSession) sendAudio(msg base.RtmpMsg) {
 			if err := conn.audioTrack.WriteRTP(pkt); err != nil {
 				continue
 			}
+			conn.recordSentRTP(pkt)
 		}
 	}
 }
@@ -325,6 +333,7 @@ func (conn *whepSession) sendVideo(msg base.RtmpMsg) {
 			if err := conn.videoTrack.WriteRTP(pkt); err != nil {
 				continue
 			}
+			conn.recordSentRTP(pkt)
 		}
 	}
 }
@@ -372,4 +381,48 @@ func (conn *whepSession) Close() {
 	if conn.pc != nil {
 		conn.pc.Close()
 	}
+}
+
+func (conn *whepSession) GetSubscriberStat() maxlogic.SubscriberStat {
+	conn.refreshRemoteAddr()
+	return maxlogic.SubscriberStat{
+		RemoteAddr:    conn.loadRemoteAddr(),
+		WroteBytesSum: conn.wroteBytes.Load(),
+	}
+}
+
+func (conn *whepSession) recordSentRTP(pkt *rtp.Packet) {
+	if pkt == nil {
+		return
+	}
+	conn.wroteBytes.Add(uint64(pkt.MarshalSize()))
+}
+
+func (conn *whepSession) refreshRemoteAddr() {
+	if remoteAddr := conn.currentRemoteAddr(); remoteAddr != "" {
+		conn.remoteAddr.Store(remoteAddr)
+	}
+}
+
+func (conn *whepSession) currentRemoteAddr() string {
+	if conn.videoSender != nil {
+		if remoteAddr := remoteAddrFromDTLSTransport(conn.videoSender.Transport()); remoteAddr != "" {
+			return remoteAddr
+		}
+	}
+	if conn.audioSender != nil {
+		if remoteAddr := remoteAddrFromDTLSTransport(conn.audioSender.Transport()); remoteAddr != "" {
+			return remoteAddr
+		}
+	}
+	if sctp := conn.pc.SCTP(); sctp != nil {
+		return remoteAddrFromDTLSTransport(sctp.Transport())
+	}
+	return ""
+}
+
+func (conn *whepSession) loadRemoteAddr() string {
+	v := conn.remoteAddr.Load()
+	addr, _ := v.(string)
+	return addr
 }

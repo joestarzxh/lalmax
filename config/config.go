@@ -90,6 +90,9 @@ type HttpNotifyConfig struct {
 	UpdateIntervalSec int    `json:"update_interval_sec"`
 	OnServerStart     string `json:"on_server_start"`
 	OnUpdate          string `json:"on_update"`
+	OnGroupStart      string `json:"on_group_start"`
+	OnGroupStop       string `json:"on_group_stop"`
+	OnStreamActive    string `json:"on_stream_active"`
 	OnPubStart        string `json:"on_pub_start"`
 	OnPubStop         string `json:"on_pub_stop"`
 	OnSubStart        string `json:"on_sub_start"`
