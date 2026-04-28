@@ -85,22 +85,53 @@ type GB28181MediaConfig struct {
 	MultiPortMaxIncrement uint16 `json:"multi_port_max_increment"` // 多端口范围 ListenPort+1至ListenPort+MultiPortMax
 }
 
+// ZlmCompatHookConfig ZLM 兼容 hook URL 配置
+// 为什么独立结构体：隔离 ZLM 适配层，lalmax 原有字段保持不变
+type ZlmCompatHookConfig struct {
+	ZlmOnStreamChanged    string `json:"zlm_on_stream_changed"`
+	ZlmOnServerKeepalive  string `json:"zlm_on_server_keepalive"`
+	ZlmOnStreamNoneReader string `json:"zlm_on_stream_none_reader"`
+	ZlmOnRtpServerTimeout string `json:"zlm_on_rtp_server_timeout"`
+	ZlmOnRecordMp4        string `json:"zlm_on_record_mp4"`
+	ZlmOnPublish          string `json:"zlm_on_publish"`
+	ZlmOnPlay             string `json:"zlm_on_play"`
+	ZlmOnStreamNotFound   string `json:"zlm_on_stream_not_found"`
+	ZlmOnServerStarted    string `json:"zlm_on_server_started"`
+}
+
+// HasZlmHooks 任一 ZLM 兼容 hook 字段有值即返回 true
+// 为什么：ZLM 回调与 lalmax 原有回调二选一，此方法为判断条件
+func (c ZlmCompatHookConfig) HasZlmHooks() bool {
+	return c.ZlmOnStreamChanged != "" ||
+		c.ZlmOnServerKeepalive != "" ||
+		c.ZlmOnStreamNoneReader != "" ||
+		c.ZlmOnRtpServerTimeout != "" ||
+		c.ZlmOnRecordMp4 != "" ||
+		c.ZlmOnPublish != "" ||
+		c.ZlmOnPlay != "" ||
+		c.ZlmOnStreamNotFound != ""
+}
+
 type HttpNotifyConfig struct {
-	Enable            bool   `json:"enable"`
-	UpdateIntervalSec int    `json:"update_interval_sec"`
-	OnServerStart     string `json:"on_server_start"`
-	OnUpdate          string `json:"on_update"`
-	OnGroupStart      string `json:"on_group_start"`
-	OnGroupStop       string `json:"on_group_stop"`
-	OnStreamActive    string `json:"on_stream_active"`
-	OnPubStart        string `json:"on_pub_start"`
-	OnPubStop         string `json:"on_pub_stop"`
-	OnSubStart        string `json:"on_sub_start"`
-	OnSubStop         string `json:"on_sub_stop"`
-	OnRelayPullStart  string `json:"on_relay_pull_start"`
-	OnRelayPullStop   string `json:"on_relay_pull_stop"`
-	OnRtmpConnect     string `json:"on_rtmp_connect"`
-	OnHlsMakeTs       string `json:"on_hls_make_ts"`
+	Enable               bool   `json:"enable"`
+	UpdateIntervalSec    int    `json:"update_interval_sec"`
+	KeepaliveIntervalSec int    `json:"keepalive_interval_sec"`
+	OnServerStart        string `json:"on_server_start"`
+	OnUpdate             string `json:"on_update"`
+	OnGroupStart         string `json:"on_group_start"`
+	OnGroupStop          string `json:"on_group_stop"`
+	OnStreamActive       string `json:"on_stream_active"`
+	OnPubStart           string `json:"on_pub_start"`
+	OnPubStop            string `json:"on_pub_stop"`
+	OnSubStart           string `json:"on_sub_start"`
+	OnSubStop            string `json:"on_sub_stop"`
+	OnRelayPullStart     string `json:"on_relay_pull_start"`
+	OnRelayPullStop      string `json:"on_relay_pull_stop"`
+	OnRtmpConnect        string `json:"on_rtmp_connect"`
+	OnHlsMakeTs          string `json:"on_hls_make_ts"`
+
+	// --- ZLM 兼容 hook 配置 ---
+	ZlmCompatHookConfig
 }
 
 type LogicConfig struct {
