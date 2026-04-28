@@ -16,4 +16,6 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 	s.initStatRouter(router, auth)
 	s.initCtrlRouter(router, auth)
 	s.initZlmCompatRouter(router, auth)
+
+	s.initFlvProxy(router)
 }

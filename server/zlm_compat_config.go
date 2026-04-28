@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	config "github.com/q191201771/lalmax/config"
 )
@@ -79,7 +80,11 @@ func buildZlmServerConfig(conf *config.Config) map[string]any {
 	cfg["hook.on_server_exited"] = ""
 	cfg["hook.on_stream_not_found"] = conf.HttpNotifyConfig.ZlmOnStreamNotFound
 	cfg["hook.on_record_ts"] = ""
-	cfg["hook.timeoutSec"] = "10"
+	hookTimeout := conf.HttpNotifyConfig.HookTimeoutSec
+	if hookTimeout <= 0 {
+		hookTimeout = 10
+	}
+	cfg["hook.timeoutSec"] = strconv.Itoa(hookTimeout)
 	cfg["hook.retry"] = "1"
 	cfg["hook.retry_delay"] = "3"
 	cfg["hook.stream_changed_schemas"] = ""
@@ -101,6 +106,21 @@ func extractPort(addr string) string {
 		return "0"
 	}
 	return portStr
+}
+
+// parsePortRange 解析 "30000-35000" 格式的端口范围
+// 为什么：owl 通过 setServerConfig 下发端口范围字符串，需转换为 min/max int
+func parsePortRange(s string) (int, int, bool) {
+	idx := strings.Index(s, "-")
+	if idx <= 0 || idx == len(s)-1 {
+		return 0, 0, false
+	}
+	minPort, err1 := strconv.Atoi(strings.TrimSpace(s[:idx]))
+	maxPort, err2 := strconv.Atoi(strings.TrimSpace(s[idx+1:]))
+	if err1 != nil || err2 != nil || minPort <= 0 || maxPort <= minPort {
+		return 0, 0, false
+	}
+	return minPort, maxPort, true
 }
 
 func boolStr(v bool) string {

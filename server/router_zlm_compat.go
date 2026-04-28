@@ -25,6 +25,7 @@ func (s *LalMaxServer) initZlmCompatRouter(router *gin.Engine, handlers ...gin.H
 	zlm.POST("/stopRecord", s.zlmStopRecordHandler)
 	zlm.POST("/addStreamProxy", s.zlmAddStreamProxyHandler)
 	zlm.POST("/getSnap", s.zlmGetSnapHandler)
+	zlm.POST("/webrtc", s.zlmWebrtcHandler)
 }
 
 // ---------- openRtpServer ----------
@@ -164,16 +165,52 @@ func (s *LalMaxServer) zlmSetServerConfigHandler(c *gin.Context) {
 		}
 	}
 
-	if changed > 0 {
-		s.notifyHub.UpdateZlmHookConfig(zlmCfg)
-		s.conf.HttpNotifyConfig.ZlmCompatHookConfig = zlmCfg
-	}
-
 	// 处理 keepalive 间隔
 	if v, ok := params["hook.alive_interval"]; ok && v != nil {
 		if interval, err := strconv.Atoi(*v); err == nil && interval > 0 {
 			s.conf.HttpNotifyConfig.KeepaliveIntervalSec = interval
 			changed++
+		}
+	}
+
+	// 处理 hook 超时时间
+	if v, ok := params["hook.timeoutSec"]; ok && v != nil {
+		if timeout, err := strconv.Atoi(*v); err == nil && timeout > 0 {
+			s.conf.HttpNotifyConfig.HookTimeoutSec = timeout
+			changed++
+		}
+	}
+
+	// 处理 rtp_proxy.port_range
+	if v, ok := params["rtp_proxy.port_range"]; ok && v != nil {
+		if portMin, portMax, ok := parsePortRange(*v); ok {
+			s.rtpPubMgr.UpdatePortRange(portMin, portMax)
+			changed++
+		}
+	}
+
+	if changed > 0 {
+		s.conf.HttpNotifyConfig.Enable = true
+		s.notifyHub.UpdateZlmHookConfig(zlmCfg)
+		s.conf.HttpNotifyConfig.ZlmCompatHookConfig = zlmCfg
+
+		// 同步清零 conf 中的原有 hook URL
+		s.conf.HttpNotifyConfig.OnServerStart = ""
+		s.conf.HttpNotifyConfig.OnUpdate = ""
+		s.conf.HttpNotifyConfig.OnGroupStart = ""
+		s.conf.HttpNotifyConfig.OnGroupStop = ""
+		s.conf.HttpNotifyConfig.OnStreamActive = ""
+		s.conf.HttpNotifyConfig.OnPubStart = ""
+		s.conf.HttpNotifyConfig.OnPubStop = ""
+		s.conf.HttpNotifyConfig.OnSubStart = ""
+		s.conf.HttpNotifyConfig.OnSubStop = ""
+		s.conf.HttpNotifyConfig.OnRelayPullStart = ""
+		s.conf.HttpNotifyConfig.OnRelayPullStop = ""
+		s.conf.HttpNotifyConfig.OnRtmpConnect = ""
+		s.conf.HttpNotifyConfig.OnHlsMakeTs = ""
+
+		if err := s.conf.SaveToFile(); err != nil {
+			Log.Errorf("zlm compat setServerConfig persist failed. err=%v", err)
 		}
 	}
 
@@ -304,6 +341,48 @@ func (s *LalMaxServer) zlmGetSnapHandler(c *gin.Context) {
 
 	Log.Infof("zlm compat getSnap. url=%s, size=%d", req.URL, len(data))
 	c.Data(http.StatusOK, "image/jpeg", data)
+}
+
+// ---------- webrtc ----------
+
+// zlmWebrtcHandler ZLM 兼容 WebRTC 信令接口
+// 为什么：gb28181 前端通过 /index/api/webrtc?app=xx&stream=xx&type=play 播放
+func (s *LalMaxServer) zlmWebrtcHandler(c *gin.Context) {
+	typ := c.Query("type")
+	app := c.Query("app")
+	stream := c.Query("stream")
+
+	if stream == "" || typ != "play" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "only type=play supported"})
+		return
+	}
+
+	if s.rtcsvr == nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "webrtc not enabled"})
+		return
+	}
+
+	body, err := c.GetRawData()
+	if err != nil || len(body) == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "invalid sdp offer"})
+		return
+	}
+
+	Log.Infof("zlm compat webrtc play. app=%s, stream=%s", app, stream)
+
+	sdp, err := s.rtcsvr.HandleZlmWebrtcPlay(app, stream, string(body))
+	if err != nil {
+		Log.Errorf("zlm compat webrtc play failed. app=%s, stream=%s, err=%v", app, stream, err)
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"id":   s.conf.ServerId,
+		"sdp":  sdp,
+		"type": "answer",
+	})
 }
 
 // extractHostPort 从 lal 原始配置中提取指定协议的 host:port

@@ -125,14 +125,38 @@ func (h *HttpNotify) SetSubCountFn(fn SubCountFn) {
 
 // UpdateZlmHookConfig 运行时更新 ZLM 兼容 hook 配置
 // 为什么：gb28181 通过 setServerConfig 动态设置 hook URL，需要立即生效
+// 为什么清零原有字段：ZLM 回调与 lalmax 原有回调互斥，避免双重触发
 func (h *HttpNotify) UpdateZlmHookConfig(zlmCfg config.ZlmCompatHookConfig) {
 	h.cfg.ZlmCompatHookConfig = zlmCfg
 	h.cfg.Enable = true
-	Log.Infof("zlm compat hook config updated. on_stream_changed=%s, on_server_keepalive=%s, on_publish=%s, on_play=%s",
-		zlmCfg.ZlmOnStreamChanged, zlmCfg.ZlmOnServerKeepalive, zlmCfg.ZlmOnPublish, zlmCfg.ZlmOnPlay)
+
+	if h.cfg.HookTimeoutSec > 0 {
+		h.client.Timeout = time.Duration(h.cfg.HookTimeoutSec) * time.Second
+	}
+
+	h.cfg.OnServerStart = ""
+	h.cfg.OnUpdate = ""
+	h.cfg.OnGroupStart = ""
+	h.cfg.OnGroupStop = ""
+	h.cfg.OnStreamActive = ""
+	h.cfg.OnPubStart = ""
+	h.cfg.OnPubStop = ""
+	h.cfg.OnSubStart = ""
+	h.cfg.OnSubStop = ""
+	h.cfg.OnRelayPullStart = ""
+	h.cfg.OnRelayPullStop = ""
+	h.cfg.OnRtmpConnect = ""
+	h.cfg.OnHlsMakeTs = ""
+
+	Log.Infof("zlm compat hook config updated. timeout=%ds, on_stream_changed=%s, on_server_keepalive=%s, on_publish=%s, on_play=%s",
+		h.cfg.HookTimeoutSec, zlmCfg.ZlmOnStreamChanged, zlmCfg.ZlmOnServerKeepalive, zlmCfg.ZlmOnPublish, zlmCfg.ZlmOnPlay)
 }
 
 func NewHttpNotify(cfg config.HttpNotifyConfig, serverId string) *HttpNotify {
+	timeout := notifyTimeoutSec
+	if cfg.HookTimeoutSec > 0 {
+		timeout = cfg.HookTimeoutSec
+	}
 	httpNotify := &HttpNotify{
 		cfg:         cfg,
 		serverId:    serverId,
@@ -142,7 +166,7 @@ func NewHttpNotify(cfg config.HttpNotifyConfig, serverId string) *HttpNotify {
 		plugins:     make(map[string]*hookPluginEntry),
 		httpPosts:   make(map[string]*hookHTTPPostWorker),
 		client: &http.Client{
-			Timeout: time.Duration(notifyTimeoutSec) * time.Second,
+			Timeout: time.Duration(timeout) * time.Second,
 		},
 	}
 	httpNotify.mustRegisterBuiltinHTTPPlugin()

@@ -86,6 +86,15 @@ func NewLalMaxServer(conf *config.Config) (*LalMaxServer, error) {
 			nazalog.Error("create rtc svr failed, err:", err)
 			return nil, err
 		}
+		maxsvr.rtcsvr.SetStreamNotFoundFn(func(app, stream, schema string) {
+			notifyHub.NotifyStreamNotFound(ZlmOnStreamNotFoundPayload{
+				MediaServerID: conf.ServerId,
+				App:           app,
+				Stream:        stream,
+				Schema:        schema,
+				Vhost:         "__defaultVhost__",
+			})
+		})
 	}
 
 	if conf.Fmp4Config.Http.Enable {
